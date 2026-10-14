@@ -1,24 +1,28 @@
 const express = require('express');
 const path = require('path');
-// ... tus otras importaciones (routes, cors, etc.)
+
+// Importa aquí tus rutas de la API si las tienes separadas, por ejemplo:
+// const authRoutes = require('./routes/authRoutes');
+// const evidenceRoutes = require('./routes/evidenceRoutes');
 
 const app = express();
 
-// Middlewares existentes
+// 1. Middlewares principales para procesar JSON y datos de formularios
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Servir imágenes de evidencias estáticamente
+// 2. Servir la carpeta de archivos subidos (uploads) estáticamente
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Tus rutas de la API (mantén aquí tus endpoints)
+// 3. 🟢 TUS RUTAS DE LA API (DEBEN IR ANTES DE REACT)
+// Descomenta y adapta según los archivos de rutas que tenga tu proyecto:
+// app.use('/api/auth', authRoutes);
 // app.use('/api/evidences', evidenceRoutes);
-// ...
 
-// Servir archivos estáticos del cliente (React / Vite)
+// 4. Servir los archivos estáticos del cliente compilado (React / Vite)
 app.use(express.static(path.join(__dirname, '../../client/dist')));
 
-// 🟢 RESPALDO SEGURO PARA LAS RUTAS DE REACT (SPA)
+// 5. Middleware de respaldo para las rutas de la SPA (React Router)
 app.use((req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
     return next();
@@ -26,7 +30,7 @@ app.use((req, res, next) => {
   res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
 });
 
-// Configuración del puerto para Render y entorno local
+// 6. Configuración del puerto para Render y entorno local
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
