@@ -18,8 +18,11 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Servir archivos estáticos del cliente (React / Vite)
 app.use(express.static(path.join(__dirname, '../../client/dist')));
 
-// Ruta comodín corregida para React (con la barra diagonal /)
-app.get('/*', (req, res) => {
+// 🟢 RESPALDO SEGURO PARA LAS RUTAS DE REACT (SPA)
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+    return next();
+  }
   res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
 });
 
