@@ -15,15 +15,15 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // app.use('/api/evidences', evidenceRoutes);
 // ...
 
-// 🟢 SERVIR ARCHIVOS ESTÁTICOS DEL CLIENTE (REACT / VITE)
+// Servir archivos estáticos del cliente (React / Vite)
 app.use(express.static(path.join(__dirname, '../../client/dist')));
 
-// 🟢 RUTA COMODÍN PARA REACT (MANEJO DE RUTAS DEL FRONTEND)
-app.get('*', (req, res) => {
+// Ruta comodín corregida para React (con la barra diagonal /)
+app.get('/*', (req, res) => {
   res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
 });
 
-// 🟢 CONFIGURACIÓN DEL PUERTO PARA RENDER Y ENTORNO LOCAL
+// Configuración del puerto para Render y entorno local
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
