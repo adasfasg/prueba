@@ -1,0 +1,41 @@
+{
+  "name": "pmforgex-platform",
+  "version": "1.0.0",
+  "description": "Plataforma Integral PMForgeX v1.0 para Gestión de Creadores y Servidores",
+  "private": true,
+  "scripts": {
+    "dev:server": "node server/src/index.js",
+    "dev:client": "vite client",
+    "build:client": "vite build client",
+    "test": "node tests/run-all-tests.js",
+    "start": "node server/src/index.js"
+  },
+  "keywords": [
+    "pmforgex",
+    "metin2",
+    "streamers",
+    "creators",
+    "rbac",
+    "agency"
+  ],
+  "author": "PMForgeX Team",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^1.42.0",
+    "multer": "^2.4.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2"
+  }
+}
