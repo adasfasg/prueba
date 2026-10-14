@@ -8,11 +8,18 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 🔴 AGREGA ESTA LÍNEA AQUÍ: Servir imágenes de evidencias estáticamente
+// Servir imágenes de evidencias estáticamente
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Tus rutas de la API...
 // app.use('/api/evidences', evidenceRoutes);
 // ...
+
+// 🟢 CONFIGURACIÓN DEL PUERTO PARA RENDER Y LOCAL
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en el puerto ${PORT}`);
+});
 
 module.exports = app;
