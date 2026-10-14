@@ -3,7 +3,7 @@ import DashboardLayout from '../../components/DashboardLayout';
 import { useAuth } from '../../context/AuthContext';
 import { 
   Target, FileCheck, BarChart3, Users, CheckCircle2, Clock, 
-  XCircle, Send, ExternalLink, AlertCircle, Save, Sparkles, Image as ImageIcon 
+  XCircle, Send, ExternalLink, AlertCircle, Save, Sparkles, Image as ImageIcon, Plus, Trash2 
 } from 'lucide-react';
 
 export default function CreatorDashboard() {
@@ -33,7 +33,7 @@ export default function CreatorDashboard() {
   const [evidenceFile, setEvidenceFile] = useState(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
-  // Profile Form State
+  // Profile Form State Expandido (Diseño 3 Columnas)
   const [editProfile, setEditProfile] = useState({
     alias: '',
     bio: '',
@@ -41,7 +41,21 @@ export default function CreatorDashboard() {
     twitch: '',
     youtube: '',
     tiktok: '',
-    discord: ''
+    instagram: '',
+    kick: '',
+    discord: '',
+    banner_url: '',
+    avatar_url: '',
+    stream_days: 'Mon, Tue, Wed, Thu, Fri',
+    stream_start_time: '18:00',
+    stream_end_time: '23:00',
+    games: 'Metin2, League of Legends',
+    pricing_estimate: '',
+    stream_style: 'Técnico y Dinámico',
+    campaign_preferences: 'Aperturas de servidores, Torneos PvP',
+    total_followers: '0',
+    avg_viewers: '0',
+    avg_duration: '4h'
   });
   const [profileSaved, setProfileSaved] = useState(false);
 
@@ -79,7 +93,21 @@ export default function CreatorDashboard() {
             twitch: soc.twitch || '',
             youtube: soc.youtube || '',
             tiktok: soc.tiktok || '',
-            discord: soc.discord || ''
+            instagram: soc.instagram || '',
+            kick: soc.kick || '',
+            discord: soc.discord || '',
+            banner_url: cp.banner_url || '',
+            avatar_url: cp.avatar_url || '',
+            stream_days: cp.stream_days || 'Mon, Tue, Wed, Thu, Fri',
+            stream_start_time: cp.stream_start_time || '18:00',
+            stream_end_time: cp.stream_end_time || '23:00',
+            games: cp.games || 'Metin2',
+            pricing_estimate: cp.pricing_estimate || '',
+            stream_style: cp.stream_style || '',
+            campaign_preferences: cp.campaign_preferences || '',
+            total_followers: cp.total_followers || '0',
+            avg_viewers: cp.avg_viewers || '0',
+            avg_duration: cp.avg_duration || '4h'
           });
         }
       }
@@ -97,7 +125,6 @@ export default function CreatorDashboard() {
   const handleSubmitEvidence = async (e) => {
     e.preventDefault();
     try {
-      // Usamos FormData para enviar campos de texto y archivos adjuntos juntos
       const formData = new FormData();
       formData.append('campaign_id', newEvidence.campaign_id);
       formData.append('type', newEvidence.type);
@@ -116,9 +143,7 @@ export default function CreatorDashboard() {
 
       const res = await fetch('/api/evidences', {
         method: 'POST',
-        headers: { 
-          Authorization: `Bearer ${token}` 
-        },
+        headers: { Authorization: `Bearer ${token}` },
         body: formData
       });
 
@@ -156,10 +181,21 @@ export default function CreatorDashboard() {
           alias: editProfile.alias,
           bio: editProfile.bio,
           is_available: editProfile.is_available,
+          banner_url: editProfile.banner_url,
+          avatar_url: editProfile.avatar_url,
+          stream_days: editProfile.stream_days,
+          stream_start_time: editProfile.stream_start_time,
+          stream_end_time: editProfile.stream_end_time,
+          games: editProfile.games,
+          pricing_estimate: editProfile.pricing_estimate,
+          stream_style: editProfile.stream_style,
+          campaign_preferences: editProfile.campaign_preferences,
           social_links: {
             twitch: editProfile.twitch,
             youtube: editProfile.youtube,
             tiktok: editProfile.tiktok,
+            instagram: editProfile.instagram,
+            kick: editProfile.kick,
             discord: editProfile.discord
           }
         })
@@ -223,7 +259,6 @@ export default function CreatorDashboard() {
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl">
             <form onSubmit={handleSubmitEvidence} className="space-y-4 text-xs">
-              
               <div>
                 <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">
                   Campaña y Servidor
@@ -291,9 +326,7 @@ export default function CreatorDashboard() {
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
-                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">
-                    Fecha
-                  </label>
+                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">Fecha</label>
                   <input
                     type="date"
                     required
@@ -302,11 +335,8 @@ export default function CreatorDashboard() {
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 text-xs"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">
-                    Minutos
-                  </label>
+                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">Minutos</label>
                   <input
                     type="number"
                     min="1"
@@ -316,11 +346,8 @@ export default function CreatorDashboard() {
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 text-xs"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">
-                    Media Viewers
-                  </label>
+                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">Media Viewers</label>
                   <input
                     type="number"
                     value={newEvidence.avg_viewers}
@@ -328,11 +355,8 @@ export default function CreatorDashboard() {
                     className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 text-xs"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">
-                    Pico Viewers
-                  </label>
+                  <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5">Pico Viewers</label>
                   <input
                     type="number"
                     value={newEvidence.peak_viewers}
@@ -342,7 +366,6 @@ export default function CreatorDashboard() {
                 </div>
               </div>
 
-              {/* CAMPO DE SELECCIÓN DE ARCHIVO / IMAGEN (REEMPLAZANDO EL INPUT URL) */}
               <div>
                 <label className="block text-slate-300 font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
                   <ImageIcon className="w-4 h-4 text-amber-400" />
@@ -354,9 +377,6 @@ export default function CreatorDashboard() {
                   onChange={e => setEvidenceFile(e.target.files[0])}
                   className="w-full p-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 text-xs cursor-pointer"
                 />
-                <span className="text-[10px] text-slate-500 mt-1 block">
-                  Sube una captura de pantalla directamente desde tu dispositivo para que tu PM la audite.
-                </span>
               </div>
 
               <div>
@@ -381,7 +401,6 @@ export default function CreatorDashboard() {
                   <span>Enviar Evidencia para Auditoría</span>
                 </button>
               </div>
-
             </form>
           </div>
         </div>
@@ -403,27 +422,21 @@ export default function CreatorDashboard() {
                     <span className="text-xs font-bold text-amber-400">{ev.campaign_name} ({ev.server_name})</span>
                     <h4 className="text-sm font-semibold text-white mt-0.5">{ev.platform} — {(ev.duration_minutes / 60).toFixed(1)} horas</h4>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
-                      ev.status === 'approved' 
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                        : ev.status === 'rejected'
-                        ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                    }`}>
-                      {ev.status === 'approved' ? 'Aprobada' : ev.status === 'rejected' ? 'Rechazada' : 'En Revisión'}
-                    </span>
-                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
+                    ev.status === 'approved' 
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                      : ev.status === 'rejected'
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  }`}>
+                    {ev.status === 'approved' ? 'Aprobada' : ev.status === 'rejected' ? 'Rechazada' : 'En Revisión'}
+                  </span>
                 </div>
 
-                {/* Rejection Banner */}
                 {ev.status === 'rejected' && (
                   <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400 flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold">Motivo del rechazo: </span>
-                      {ev.rejection_reason}
-                    </div>
+                    <div><span className="font-bold">Motivo del rechazo: </span>{ev.rejection_reason}</div>
                   </div>
                 )}
 
@@ -454,101 +467,4 @@ export default function CreatorDashboard() {
                   </span>
                 </div>
                 <h4 className="text-base font-bold text-white">{camp.name}</h4>
-                <p className="text-xs text-slate-400">{camp.objective}</p>
-                <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-300">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">Requisitos pactados:</span>
-                  <div className="mt-1">{camp.requirements || 'Cumplir directos semanales con logo oficial.'}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Tab: Mi Perfil */}
-      {activeTab === 'profile' && (
-        <div className="max-w-2xl mx-auto space-y-6">
-          <div>
-            <h3 className="text-lg font-bold text-white font-heading">Editar Perfil Público</h3>
-            <p className="text-xs text-slate-400">Esta información se muestra en el catálogo público de PMForgeX.</p>
-          </div>
-
-          {profileSaved && (
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-xs flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Perfil actualizado correctamente en la plataforma.</span>
-            </div>
-          )}
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <form onSubmit={handleSaveProfile} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Alias / Nombre Artístico</label>
-                <input
-                  type="text"
-                  required
-                  value={editProfile.alias}
-                  onChange={e => setEditProfile({ ...editProfile, alias: e.target.value })}
-                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Biografía / Presentación</label>
-                <textarea
-                  rows={3}
-                  value={editProfile.bio}
-                  onChange={e => setEditProfile({ ...editProfile, bio: e.target.value })}
-                  className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
-                />
-              </div>
-
-              <div className="flex items-center gap-3 p-3 bg-slate-950 rounded-xl border border-slate-800">
-                <input
-                  type="checkbox"
-                  id="avail"
-                  checked={editProfile.is_available}
-                  onChange={e => setEditProfile({ ...editProfile, is_available: e.target.checked })}
-                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
-                />
-                <label htmlFor="avail" className="text-xs text-slate-300 font-semibold cursor-pointer">
-                  Marcar como disponible para nuevas campañas en el catálogo
-                </label>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Twitch URL</label>
-                  <input
-                    type="url"
-                    value={editProfile.twitch}
-                    onChange={e => setEditProfile({ ...editProfile, twitch: e.target.value })}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">YouTube URL</label>
-                  <input
-                    type="url"
-                    value={editProfile.youtube}
-                    onChange={e => setEditProfile({ ...editProfile, youtube: e.target.value })}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase rounded-xl transition-colors flex items-center justify-center gap-2"
-              >
-                <Save className="w-4 h-4" />
-                <span>Guardar Cambios de Perfil</span>
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-    </DashboardLayout>
-  );
-}
+                <p className="text-xs text-slate-4
