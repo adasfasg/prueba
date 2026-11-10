@@ -3,13 +3,13 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 const AuthContext = createContext(null);
 
 export const DEMO_PRESETS = [
-  { label: 'Super Admin', email: 'admin@pmforgex.com', pass: 'PMForgeX2026!Admin', role: 'super_admin', badgeColor: 'bg-red-500/20 text-red-400 border-red-500/30' },
-  { label: 'Dir. Operacional', email: 'operaciones@pmforgex.com', pass: 'PMForgeX2026!Ops', role: 'director_ops', badgeColor: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
-  { label: 'Dir. de PMs', email: 'director.pm@pmforgex.com', pass: 'PMForgeX2026!DirPM', role: 'director_pms', badgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
-  { label: 'Dir. de Creadores', email: 'director.creadores@pmforgex.com', pass: 'PMForgeX2026!DirCr', role: 'director_creators', badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' },
-  { label: 'Promoter Manager', email: 'pm.carlos@pmforgex.com', pass: 'PMForgeX2026!PM1', role: 'pm', badgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  { label: 'Creador / Streamer', email: 'creador.dragonslayer@pmforgex.com', pass: 'PMForgeX2026!Creator', role: 'creator', badgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
-  { label: 'Dueño de Servidor', email: 'owner.metinclassic@pmforgex.com', pass: 'PMForgeX2026!Owner', role: 'server_owner', badgeColor: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' },
+  { label: 'Super Admin', username: 'admin', email: 'admin@pmforgex.com', pass: 'PMForgeX2026!Admin', role: 'super_admin', badgeColor: 'bg-red-500/20 text-red-400 border-red-500/30' },
+  { label: 'Dir. Operacional', username: 'operaciones', email: 'operaciones@pmforgex.com', pass: 'PMForgeX2026!Ops', role: 'director_ops', badgeColor: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+  { label: 'Dir. de PMs', username: 'director.pm', email: 'director.pm@pmforgex.com', pass: 'PMForgeX2026!DirPM', role: 'director_pms', badgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
+  { label: 'Dir. de Creadores', username: 'director.creadores', email: 'director.creadores@pmforgex.com', pass: 'PMForgeX2026!DirCr', role: 'director_creators', badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' },
+  { label: 'Promoter Manager', username: 'pm.carlos', email: 'pm.carlos@pmforgex.com', pass: 'PMForgeX2026!PM1', role: 'pm', badgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+  { label: 'Creador / Streamer', username: 'dragonslayer', email: 'creador.dragonslayer@pmforgex.com', pass: 'PMForgeX2026!Creator', role: 'creator', badgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
+  { label: 'Dueño de Servidor', username: 'owner.astra2', email: 'owner.metinclassic@pmforgex.com', pass: 'PMForgeX2026!Owner', role: 'server_owner', badgeColor: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' },
 ];
 
 export function getDashboardRoute(role) {
@@ -68,11 +68,12 @@ export function AuthProvider({ children }) {
     verifyUser();
   }, []);
 
-  const login = async (email, password) => {
+  // Step 1: Send username/email + password -> Request OTP code
+  const requestLogin = async (identifier, password) => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ identifier, password })
     });
 
     const data = await res.json();
@@ -80,10 +81,42 @@ export function AuthProvider({ children }) {
       throw new Error(data.error || 'Error al iniciar sesión');
     }
 
+    return data;
+  };
+
+  // Step 2: Verify 6-digit OTP code -> Complete Login and receive JWT
+  const verify2FA = async (tempToken, otpCode) => {
+    const res = await fetch('/api/auth/verify-2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ temp_token: tempToken, otp_code: otpCode })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Código de verificación incorrecto');
+    }
+
     localStorage.setItem('pmforgex_token', data.token);
     setToken(data.token);
     setUser(data.user);
     return data.user;
+  };
+
+  // Resend OTP code if expired or missing
+  const resend2FA = async (tempToken) => {
+    const res = await fetch('/api/auth/resend-2fa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ temp_token: tempToken })
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Error al reenviar código');
+    }
+
+    return data;
   };
 
   const logout = () => {
@@ -93,7 +126,16 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, getDashboardRoute }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      token, 
+      loading, 
+      requestLogin, 
+      verify2FA, 
+      resend2FA, 
+      logout, 
+      getDashboardRoute 
+    }}>
       {children}
     </AuthContext.Provider>
   );

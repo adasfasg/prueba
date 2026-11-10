@@ -12,8 +12,8 @@ router.post('/', authenticateToken, requireRole(['super_admin', 'director_ops'])
 router.put('/:id', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.updateServer);
 router.delete('/:id', authenticateToken, requireRole(['super_admin']), serversController.deleteServer);
 
-// Assign creator to server
-router.post('/:id/creators', authenticateToken, requireRole(['super_admin', 'director_ops', 'director_pms', 'director_creators', 'pm']), serversController.assignCreatorToServer);
-router.delete('/:id/creators/:creatorId', authenticateToken, requireRole(['super_admin', 'director_ops', 'pm']), serversController.removeCreatorFromServer);
+// Assign creator to server - Restricted strictly to Administrator
+router.post('/:id/creators', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.assignCreatorToServer);
+router.delete('/:id/creators/:creatorId', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.removeCreatorFromServer);
 
 module.exports = router;

@@ -8,7 +8,10 @@ const { requireRole } = require('../middleware/rbac');
 // Super Admin, Director de Creadores, PM (only their assigned creators)
 router.get('/', authenticateToken, requireRole(['super_admin', 'director_ops', 'director_creators', 'pm']), creatorsController.getPrivateCreators);
 
-// Update profile (Creator self or Admin)
+// Creator evidences history
+router.get('/:id/evidences', authenticateToken, requireRole(['super_admin', 'director_ops', 'director_creators', 'pm']), creatorsController.getCreatorEvidences);
+
+// Update profile (Creator self, PM if assigned, or Admin)
 router.put('/:id', authenticateToken, creatorsController.updateCreatorProfile);
 
 module.exports = router;

@@ -2,20 +2,32 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth, getDashboardRoute } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
+import { useLanguage } from '../context/LanguageContext';
 import { 
   ShieldCheck, LogIn, LogOut, LayoutDashboard, Bell, Menu, X, 
-  ChevronDown, ExternalLink, Gamepad2, Users, Flame 
+  Globe, MessageSquare, Sparkles, Send
 } from 'lucide-react';
 
 export default function Navbar({ onOpenLogin }) {
   const { user, logout } = useAuth();
   const { notifications, unreadCount, markAsRead } = useNotifications();
+  const { lang, toggleLanguage, t } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const navigate = useNavigate();
 
+  const handleScrollToContact = (e) => {
+    e.preventDefault();
+    const el = document.getElementById('contacto');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      window.location.href = '/#contacto';
+    }
+  };
+
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/80 transition-all">
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-slate-950/85 backdrop-blur-md border-b border-slate-800/80 transition-all">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-20">
           
@@ -36,40 +48,63 @@ export default function Navbar({ onOpenLogin }) {
                 PMFORGEX
               </span>
               <span className="text-[10px] tracking-widest text-slate-400 font-semibold uppercase -mt-1">
-                AGENCIA GAMING & METIN2
+                AGENCIA GAMING & SERVIDORES
               </span>
             </div>
           </Link>
 
           {/* Desktop Nav Links */}
-          <div className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-300">
-            <a href="/#inicio" className="hover:text-amber-400 transition-colors">Inicio</a>
-            <a href="/#servicios" className="hover:text-amber-400 transition-colors">Servicios</a>
-            <a href="/#ecosistemas" className="hover:text-amber-400 transition-colors">Ecosistemas</a>
-            <a href="/#creadores" className="hover:text-amber-400 transition-colors flex items-center gap-1.5">
-              <span>Creadores</span>
-              <span className="px-1.5 py-0.5 text-[10px] uppercase font-bold bg-amber-500/20 text-amber-300 rounded-full border border-amber-500/30">
-                Público
+          <div className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-300">
+            <a href="/#inicio" className="hover:text-amber-400 transition-colors">{t.nav.home}</a>
+            <a href="/#quienes-somos" className="hover:text-amber-400 transition-colors">{t.nav.about}</a>
+            <a href="/#servicios" className="hover:text-amber-400 transition-colors">{t.nav.services}</a>
+            <a href="/#diseno-web" className="hover:text-amber-400 transition-colors flex items-center gap-1.5">
+              <span>{t.nav.webDesign}</span>
+              <span className="px-1.5 py-0.5 text-[9px] uppercase font-bold bg-amber-500/20 text-amber-300 rounded-full border border-amber-500/30">
+                Nuevo
               </span>
             </a>
-            <a href="/#como-funciona" className="hover:text-amber-400 transition-colors">Cómo Funciona</a>
-            <a href="/#contacto" className="hover:text-amber-400 transition-colors">Contacto</a>
+            <a href="/#como-funciona" className="hover:text-amber-400 transition-colors">{t.nav.howItWorks}</a>
+            <a href="/#hub-promotor" className="hover:text-amber-400 transition-colors">Hub</a>
           </div>
 
-          {/* Right Action: Login / User Menu */}
-          <div className="hidden md:flex items-center gap-4">
+          {/* Right Action: Language Switch + Contact CTA + Login */}
+          <div className="hidden sm:flex items-center gap-3">
+            
+            {/* 1-Click Language Selector (ES / EN) */}
+            <button
+              onClick={toggleLanguage}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-xs font-bold text-slate-300 hover:text-amber-400 transition-all cursor-pointer"
+              title="Cambiar Idioma / Switch Language"
+            >
+              <Globe className="w-3.5 h-3.5 text-amber-400" />
+              <span className={lang === 'es' ? 'text-amber-400 font-extrabold' : 'text-slate-500'}>ES</span>
+              <span className="text-slate-600">/</span>
+              <span className={lang === 'en' ? 'text-amber-400 font-extrabold' : 'text-slate-500'}>EN</span>
+            </button>
+
+            {/* Always Visible Contact CTA Button */}
+            <button
+              onClick={handleScrollToContact}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-amber-500/20 hover:scale-[1.02] transition-all cursor-pointer"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{t.nav.contactBtn}</span>
+            </button>
+
+            {/* User Logged in / Login Button */}
             {user ? (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 {/* Notifications Bell */}
                 <div className="relative">
                   <button 
                     onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
-                    className="p-2 text-slate-300 hover:text-amber-400 hover:bg-slate-900 rounded-lg relative transition-all"
+                    className="p-2 text-slate-300 hover:text-amber-400 hover:bg-slate-900 rounded-xl relative transition-all cursor-pointer"
                     title="Notificaciones"
                   >
-                    <Bell className="w-5 h-5" />
+                    <Bell className="w-4 h-4" />
                     {unreadCount > 0 && (
-                      <span className="absolute top-1 right-1 w-4 h-4 text-[10px] font-bold bg-red-500 text-white rounded-full flex items-center justify-center animate-pulse">
+                      <span className="absolute top-1 right-1 w-3.5 h-3.5 text-[9px] font-bold bg-red-500 text-white rounded-full flex items-center justify-center animate-pulse">
                         {unreadCount}
                       </span>
                     )}
@@ -108,42 +143,49 @@ export default function Navbar({ onOpenLogin }) {
                   )}
                 </div>
 
-                {/* Go to Dashboard button */}
+                {/* Dashboard button */}
                 <Link
                   to={getDashboardRoute(user.role)}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-lg shadow-md hover:shadow-amber-500/20 transition-all"
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-amber-500/40 text-amber-400 hover:bg-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl transition-all"
                 >
                   <LayoutDashboard className="w-4 h-4" />
-                  <span>Mi Panel</span>
+                  <span>{t.nav.dashboard}</span>
                 </Link>
 
                 {/* Logout */}
                 <button
                   onClick={logout}
-                  className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-900 rounded-lg transition-all"
-                  title="Cerrar Sesión"
+                  className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-900 rounded-xl transition-all cursor-pointer"
+                  title={t.nav.logout}
                 >
-                  <LogOut className="w-5 h-5" />
+                  <LogOut className="w-4 h-4" />
                 </button>
               </div>
             ) : (
               <button
                 onClick={onOpenLogin}
-                className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-slate-200 hover:text-amber-400 font-semibold text-xs uppercase tracking-wider rounded-lg transition-all shadow-sm"
+                className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500/50 text-slate-200 hover:text-amber-400 font-bold text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer"
               >
-                <LogIn className="w-4 h-4 text-amber-400" />
-                <span>Acceso Plataforma</span>
+                <LogIn className="w-3.5 h-3.5 text-amber-400" />
+                <span>{t.nav.login}</span>
               </button>
             )}
           </div>
 
-          {/* Mobile menu button */}
-          <div className="flex md:hidden items-center gap-3">
-            {user && (
-              <Link to={getDashboardRoute(user.role)} className="p-2 text-amber-400">
-                <LayoutDashboard className="w-5 h-5" />
-              </Link>
-            )}
+          {/* Mobile menu trigger */}
+          <div className="flex sm:hidden items-center gap-2">
+            <button
+              onClick={toggleLanguage}
+              className="px-2 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs font-bold text-amber-400"
+            >
+              {lang.toUpperCase()}
+            </button>
+            <button
+              onClick={handleScrollToContact}
+              className="px-2.5 py-1.5 bg-amber-500 text-slate-950 font-bold text-[11px] rounded-lg"
+            >
+              Contactar
+            </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 text-slate-300 hover:text-white"
@@ -157,34 +199,43 @@ export default function Navbar({ onOpenLogin }) {
 
       {/* Mobile Menu Dropdown */}
       {mobileMenuOpen && (
-        <div className="md:hidden bg-slate-950/95 border-b border-slate-800 px-4 pt-3 pb-6 space-y-3">
-          <a href="/#inicio" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Inicio</a>
-          <a href="/#servicios" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Servicios</a>
-          <a href="/#ecosistemas" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Ecosistemas</a>
-          <a href="/#creadores" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Catálogo de Creadores</a>
-          <a href="/#como-funciona" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Cómo Funciona</a>
-          <a href="/#contacto" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Contacto</a>
-          <div className="pt-3 border-t border-slate-800">
+        <div className="sm:hidden bg-slate-950/95 border-b border-slate-800 px-4 pt-3 pb-6 space-y-3">
+          <a href="/#inicio" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">{t.nav.home}</a>
+          <a href="/#quienes-somos" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">{t.nav.about}</a>
+          <a href="/#servicios" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">{t.nav.services}</a>
+          <a href="/#diseno-web" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">{t.nav.webDesign}</a>
+          <a href="/#como-funciona" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">{t.nav.howItWorks}</a>
+          <a href="/#hub-promotor" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300 hover:text-amber-400">Hub</a>
+          
+          <div className="pt-3 border-t border-slate-800 space-y-2">
+            <button
+              onClick={() => { setMobileMenuOpen(false); handleScrollToContact(new Event('click')); }}
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 font-extrabold text-xs uppercase rounded-xl"
+            >
+              <Send className="w-4 h-4" />
+              <span>{t.nav.contactBtn}</span>
+            </button>
+
             {user ? (
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between pt-1">
                 <Link 
                   to={getDashboardRoute(user.role)} 
                   onClick={() => setMobileMenuOpen(false)}
-                  className="px-4 py-2 bg-amber-500 text-slate-950 font-bold text-xs rounded-lg"
+                  className="px-4 py-2 bg-slate-900 border border-amber-500/40 text-amber-400 font-bold text-xs rounded-xl"
                 >
-                  Ir al Panel ({user.role})
+                  {t.nav.dashboard}
                 </Link>
-                <button onClick={() => { logout(); setMobileMenuOpen(false); }} className="text-red-400 text-xs">
-                  Cerrar Sesión
+                <button onClick={() => { logout(); setMobileMenuOpen(false); }} className="text-red-400 text-xs font-semibold">
+                  {t.nav.logout}
                 </button>
               </div>
             ) : (
               <button
                 onClick={() => { onOpenLogin(); setMobileMenuOpen(false); }}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-amber-500 text-slate-950 font-bold text-xs uppercase rounded-lg"
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-slate-900 border border-slate-700 text-slate-200 font-bold text-xs uppercase rounded-xl"
               >
-                <LogIn className="w-4 h-4" />
-                <span>Acceso Plataforma</span>
+                <LogIn className="w-4 h-4 text-amber-400" />
+                <span>{t.nav.login}</span>
               </button>
             )}
           </div>

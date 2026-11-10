@@ -77,7 +77,7 @@ function getPublicStats(req, res) {
       COALESCE(SUM(total_views), 0) as total_views,
       COALESCE(MAX(peak_viewers), 0) as peak_viewers
     FROM activity_evidences
-    WHERE status = 'approved'
+    WHERE status IN ('approved', 'paid')
   `).get();
 
   return res.json({

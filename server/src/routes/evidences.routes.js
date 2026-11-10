@@ -38,4 +38,7 @@ router.post('/', authenticateToken, upload.single('evidence_image'), evidencesCo
 // Review evidence (Approve / Reject) - Super Admin and PM
 router.put('/:id/review', authenticateToken, requireRole(['super_admin', 'director_ops', 'pm']), evidencesController.reviewEvidence);
 
+// Pay evidence - Only Super Admin and Director Ops
+router.post('/:id/pay', authenticateToken, requireRole(['super_admin', 'director_ops']), evidencesController.payEvidence);
+
 module.exports = router;

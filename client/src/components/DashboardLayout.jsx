@@ -5,7 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { 
   LayoutDashboard, Users, Server, Target, FileCheck, Shield, 
   BarChart3, Bell, LogOut, ExternalLink, Menu, X, CheckCircle2,
-  AlertTriangle, UserCheck, Flame
+  AlertTriangle, UserCheck, Flame, DollarSign
 } from 'lucide-react';
 
 export default function DashboardLayout({ children, activeTab, onTabChange }) {
@@ -23,6 +23,9 @@ export default function DashboardLayout({ children, activeTab, onTabChange }) {
       case 'super_admin':
         return [
           { id: 'overview', label: 'Resumen Global', icon: LayoutDashboard },
+          { id: 'reports', label: 'Informes & Analytics', icon: BarChart3 },
+          { id: 'evidences', label: 'Entregas & Pagos', icon: DollarSign },
+          { id: 'talent', label: 'PMs & Streamers', icon: UserCheck },
           { id: 'users', label: 'Gestión de Usuarios', icon: Users },
           { id: 'servers', label: 'Servidores & PMs', icon: Server },
           { id: 'campaigns', label: 'Campañas Globales', icon: Target },

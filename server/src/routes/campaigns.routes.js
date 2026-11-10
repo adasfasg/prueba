@@ -10,8 +10,11 @@ router.get('/', authenticateToken, campaignsController.getCampaigns);
 // Create campaign: Super Admin, Director Operacional, PM
 router.post('/', authenticateToken, requireRole(['super_admin', 'director_ops', 'pm']), campaignsController.createCampaign);
 
-// Update campaign
+// Update campaign (PM for their campaigns, Admin for any)
 router.put('/:id', authenticateToken, requireRole(['super_admin', 'director_ops', 'pm']), campaignsController.updateCampaign);
+
+// Delete campaign: Super Admin and Director Operacional
+router.delete('/:id', authenticateToken, requireRole(['super_admin', 'director_ops']), campaignsController.deleteCampaign);
 
 // Assign / remove creators
 router.post('/:id/creators', authenticateToken, requireRole(['super_admin', 'director_ops', 'pm']), campaignsController.assignCreatorToCampaign);

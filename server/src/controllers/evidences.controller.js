@@ -10,17 +10,23 @@ function getEvidences(req, res) {
       ae.id, ae.campaign_id, ae.creator_id, ae.type, ae.platform, ae.content_url,
       ae.activity_date, ae.duration_minutes, ae.avg_viewers, ae.peak_viewers, ae.total_views,
       ae.evidence_screenshots, ae.creator_notes, ae.internal_notes, ae.status, ae.rejection_reason,
-      ae.reviewed_by_user_id, ae.reviewed_at, ae.created_at,
+      ae.reviewed_by_user_id, ae.reviewed_at, ae.paid_at, ae.paid_by_user_id,
+      ae.payout_amount, ae.payment_reference, ae.payment_notes, ae.created_at,
       c.name as campaign_name,
       s.id as server_id, s.name as server_name, s.game as server_game, s.logo_url as server_logo,
       s.owner_user_id, s.pm_user_id,
+      u_creator.full_name as creator_full_name, u_creator.username as creator_username,
       cp.alias as creator_alias, cp.avatar_url as creator_avatar,
-      reviewer.full_name as reviewer_name
+      cp.hourly_rate_internal, cp.fixed_rate_internal,
+      reviewer.full_name as reviewer_name,
+      payer.full_name as payer_name
     FROM activity_evidences ae
     JOIN campaigns c ON ae.campaign_id = c.id
     JOIN servers s ON c.server_id = s.id
+    JOIN users u_creator ON ae.creator_id = u_creator.id
     LEFT JOIN creator_profiles cp ON ae.creator_id = cp.user_id
     LEFT JOIN users reviewer ON ae.reviewed_by_user_id = reviewer.id
+    LEFT JOIN users payer ON ae.paid_by_user_id = payer.id
     WHERE c.deleted_at IS NULL AND s.deleted_at IS NULL
   `;
   const params = [];
@@ -33,8 +39,8 @@ function getEvidences(req, res) {
     query += ' AND (s.pm_user_id = ? OR c.pm_user_id = ?)';
     params.push(userId, userId);
   } else if (role === 'server_owner') {
-    // Server Owner ONLY sees approved evidences for their server!
-    query += " AND s.owner_user_id = ? AND ae.status = 'approved'";
+    // Server Owner sees approved and paid evidences for their server!
+    query += " AND s.owner_user_id = ? AND ae.status IN ('approved', 'paid')";
     params.push(userId);
   }
 
@@ -52,17 +58,33 @@ function getEvidences(req, res) {
 
   const evidences = db.prepare(query).all(...params);
 
-  // Sanitization: hide internal_notes from Server Owner and Creator
+  // Sanitization: hide internal_notes and internal rates from Server Owner
   const sanitized = evidences.map(ev => {
     let screenshots = [];
     try { screenshots = JSON.parse(ev.evidence_screenshots || '[]'); } catch (e) {}
 
+    const hourlyRate = parseFloat(ev.hourly_rate_internal) || 0;
+    const fixedRate = parseFloat(ev.fixed_rate_internal) || 0;
+    const hours = (ev.duration_minutes || 0) / 60;
+    const suggestedPayout = parseFloat(((hours * hourlyRate) + fixedRate).toFixed(2));
+
     const item = {
       ...ev,
-      evidence_screenshots: screenshots
+      evidence_screenshots: screenshots,
+      suggested_payout: suggestedPayout
     };
 
-    if (role === 'server_owner' || role === 'creator') {
+    if (role === 'server_owner') {
+      delete item.internal_notes;
+      delete item.hourly_rate_internal;
+      delete item.fixed_rate_internal;
+      delete item.suggested_payout;
+      delete item.payout_amount;
+      delete item.payment_reference;
+      delete item.payment_notes;
+      delete item.paid_by_user_id;
+      delete item.payer_name;
+    } else if (role === 'creator') {
       delete item.internal_notes;
     }
 
@@ -171,8 +193,12 @@ function reviewEvidence(req, res) {
   const evidenceId = parseInt(req.params.id, 10);
   const { status, rejection_reason, internal_notes } = req.body;
 
-  if (!['approved', 'rejected', 'review'].includes(status)) {
-    return res.status(400).json({ error: 'Estado inválido. Debe ser approved, rejected o review.' });
+  if (status === 'paid' && role !== 'super_admin' && role !== 'director_ops') {
+    return res.status(403).json({ error: 'Acceso denegado: Únicamente el Administrador puede procesar y marcar entregas como pagadas.' });
+  }
+
+  if (!['approved', 'rejected', 'review', 'paid'].includes(status)) {
+    return res.status(400).json({ error: 'Estado inválido. Debe ser approved, rejected, review o paid.' });
   }
 
   if (status === 'rejected' && (!rejection_reason || rejection_reason.trim() === '')) {
@@ -219,6 +245,8 @@ function reviewEvidence(req, res) {
   // Notify Creator of decision
   const statusMsg = status === 'approved' 
     ? `Tu evidencia en ${evidence.platform} ha sido APROBADA.` 
+    : status === 'paid'
+    ? `Tu evidencia en ${evidence.platform} ha sido marcada como PAGADA.`
     : `Tu evidencia en ${evidence.platform} ha sido RECHAZADA. Motivo: ${rejection_reason}`;
   
   db.prepare(`
@@ -226,9 +254,9 @@ function reviewEvidence(req, res) {
     VALUES (?, ?, ?, ?, ?)
   `).run(
     evidence.creator_id,
-    `Evidencia ${status === 'approved' ? 'Aprobada' : 'Rechazada'}`,
+    `Evidencia ${status === 'approved' ? 'Aprobada' : status === 'paid' ? 'Pagada' : 'Rechazada'}`,
     statusMsg,
-    status === 'approved' ? 'success' : 'danger',
+    status === 'rejected' ? 'danger' : 'success',
     '/dashboard/creator?tab=evidences'
   );
 
@@ -251,8 +279,102 @@ function reviewEvidence(req, res) {
   return res.json({ message: `Evidencia actualizada a estado "${status}".` });
 }
 
+function payEvidence(req, res) {
+  const { id: userId, role } = req.user;
+  const evidenceId = parseInt(req.params.id, 10);
+  const { payout_amount, payment_reference, payment_notes } = req.body;
+
+  if (role !== 'super_admin' && role !== 'director_ops') {
+    return res.status(403).json({ error: 'Acceso denegado: Únicamente el Administrador puede procesar y liquidar pagos de entregas.' });
+  }
+
+  const parsedAmount = parseFloat(payout_amount);
+  if (isNaN(parsedAmount) || parsedAmount < 0) {
+    return res.status(400).json({ error: 'El monto de liquidación debe ser un número positivo válido.' });
+  }
+
+  const evidence = db.prepare(`
+    SELECT ae.*, c.name as campaign_name, s.name as server_name, s.pm_user_id as server_pm_id, c.pm_user_id as campaign_pm_id,
+           u.full_name as creator_name, cp.alias as creator_alias
+    FROM activity_evidences ae
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    JOIN users u ON ae.creator_id = u.id
+    LEFT JOIN creator_profiles cp ON ae.creator_id = cp.user_id
+    WHERE ae.id = ?
+  `).get(evidenceId);
+
+  if (!evidence) {
+    return res.status(404).json({ error: 'Entrega no encontrada.' });
+  }
+
+  const cleanReference = payment_reference && payment_reference.trim() ? payment_reference.trim() : `PAY-${Date.now()}`;
+  const cleanNotes = payment_notes && payment_notes.trim() ? payment_notes.trim() : null;
+
+  db.prepare(`
+    UPDATE activity_evidences
+    SET status = 'paid',
+        paid_at = CURRENT_TIMESTAMP,
+        paid_by_user_id = ?,
+        payout_amount = ?,
+        payment_reference = ?,
+        payment_notes = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    userId,
+    parsedAmount,
+    cleanReference,
+    cleanNotes,
+    evidenceId
+  );
+
+  // Notify Creator
+  db.prepare(`
+    INSERT INTO notifications (user_id, title, message, type, link_url)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    evidence.creator_id,
+    'Entrega Pagada 💰',
+    `Tu entrega de ${evidence.platform} para "${evidence.campaign_name}" ha sido PAGADA ($${parsedAmount.toFixed(2)} USD). Ref: ${cleanReference}.`,
+    'success',
+    '/dashboard/creator?tab=evidences'
+  );
+
+  // Notify PM in charge
+  const targetPmId = evidence.campaign_pm_id || evidence.server_pm_id;
+  if (targetPmId) {
+    db.prepare(`
+      INSERT INTO notifications (user_id, title, message, type, link_url)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      targetPmId,
+      'Entrega Liquidada por Admin',
+      `La entrega de ${evidence.creator_alias || evidence.creator_name} para "${evidence.campaign_name}" ha sido liquidada por el Administrador ($${parsedAmount.toFixed(2)} USD).`,
+      'info',
+      '/dashboard/pm?tab=review'
+    );
+  }
+
+  logAudit(userId, 'EVIDENCE_PAID', 'activity_evidences', evidenceId, {
+    amount: parsedAmount,
+    reference: cleanReference,
+    creator_id: evidence.creator_id,
+    campaign_id: evidence.campaign_id
+  }, req);
+
+  return res.json({
+    message: 'Entrega liquidada y marcada como pagada exitosamente.',
+    evidence_id: evidenceId,
+    status: 'paid',
+    payout_amount: parsedAmount,
+    payment_reference: cleanReference
+  });
+}
+
 module.exports = {
   getEvidences,
   createEvidence,
-  reviewEvidence
+  reviewEvidence,
+  payEvidence
 };

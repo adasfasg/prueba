@@ -14,6 +14,8 @@ const evidencesRoutes = require('./routes/evidences.routes');
 const metricsRoutes = require('./routes/metrics.routes');
 const auditRoutes = require('./routes/audit.routes');
 const notificationsRoutes = require('./routes/notifications.routes');
+const uploadRoutes = require('./routes/upload.routes');
+const financialsRoutes = require('./routes/financials.routes');
 
 const app = express();
 
@@ -32,6 +34,13 @@ if (fs.existsSync(assetsPath)) {
   app.use('/assets', express.static(assetsPath));
 }
 
+// Serve uploaded evidences screenshots
+const uploadsPath = path.resolve(__dirname, '../../uploads');
+if (!fs.existsSync(uploadsPath)) {
+  fs.mkdirSync(uploadsPath, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsPath));
+
 // Mount API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/public', publicRoutes);
@@ -43,6 +52,8 @@ app.use('/api/evidences', evidencesRoutes);
 app.use('/api/metrics', metricsRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/financials', financialsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

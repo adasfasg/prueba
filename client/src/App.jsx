@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth, getDashboardRoute } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
+import { LanguageProvider } from './context/LanguageContext';
 
 // Pages
 import LandingPage from './pages/public/LandingPage';
@@ -10,6 +11,7 @@ import PMDashboard from './pages/dashboard/PMDashboard';
 import CreatorDashboard from './pages/dashboard/CreatorDashboard';
 import ServerOwnerDashboard from './pages/dashboard/ServerOwnerDashboard';
 import DirectorDashboard from './pages/dashboard/DirectorDashboard';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function ProtectedRoute({ children, allowedRoles }) {
   const { user, loading } = useAuth();
@@ -39,82 +41,86 @@ function ProtectedRoute({ children, allowedRoles }) {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <NotificationProvider>
-        <BrowserRouter>
-          <Routes>
-            {/* Public Landing & Catalog */}
-            <Route path="/" element={<LandingPage />} />
+    <LanguageProvider>
+      <AuthProvider>
+        <NotificationProvider>
+          <BrowserRouter>
+            <ErrorBoundary>
+              <Routes>
+                {/* Public Landing */}
+                <Route path="/" element={<LandingPage />} />
 
-            {/* Dashboards by Role */}
-            <Route 
-              path="/dashboard/admin" 
-              element={
-                <ProtectedRoute allowedRoles={['super_admin']}>
-                  <SuperAdminDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                {/* Dashboards by Role */}
+                <Route 
+                  path="/dashboard/admin" 
+                  element={
+                    <ProtectedRoute allowedRoles={['super_admin']}>
+                      <SuperAdminDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            <Route 
-              path="/dashboard/director-ops" 
-              element={
-                <ProtectedRoute allowedRoles={['director_ops', 'super_admin']}>
-                  <DirectorDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                <Route 
+                  path="/dashboard/director-ops" 
+                  element={
+                    <ProtectedRoute allowedRoles={['director_ops', 'super_admin']}>
+                      <DirectorDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            <Route 
-              path="/dashboard/director-pms" 
-              element={
-                <ProtectedRoute allowedRoles={['director_pms', 'super_admin']}>
-                  <DirectorDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                <Route 
+                  path="/dashboard/director-pms" 
+                  element={
+                    <ProtectedRoute allowedRoles={['director_pms', 'super_admin']}>
+                      <DirectorDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            <Route 
-              path="/dashboard/director-creators" 
-              element={
-                <ProtectedRoute allowedRoles={['director_creators', 'super_admin']}>
-                  <DirectorDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                <Route 
+                  path="/dashboard/director-creators" 
+                  element={
+                    <ProtectedRoute allowedRoles={['director_creators', 'super_admin']}>
+                      <DirectorDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            <Route 
-              path="/dashboard/pm" 
-              element={
-                <ProtectedRoute allowedRoles={['pm', 'super_admin']}>
-                  <PMDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                <Route 
+                  path="/dashboard/pm" 
+                  element={
+                    <ProtectedRoute allowedRoles={['pm', 'super_admin']}>
+                      <PMDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            <Route 
-              path="/dashboard/creator" 
-              element={
-                <ProtectedRoute allowedRoles={['creator', 'super_admin']}>
-                  <CreatorDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                <Route 
+                  path="/dashboard/creator" 
+                  element={
+                    <ProtectedRoute allowedRoles={['creator', 'super_admin']}>
+                      <CreatorDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            <Route 
-              path="/dashboard/server-owner" 
-              element={
-                <ProtectedRoute allowedRoles={['server_owner', 'super_admin']}>
-                  <ServerOwnerDashboard />
-                </ProtectedRoute>
-              } 
-            />
+                <Route 
+                  path="/dashboard/server-owner" 
+                  element={
+                    <ProtectedRoute allowedRoles={['server_owner', 'super_admin']}>
+                      <ServerOwnerDashboard />
+                    </ProtectedRoute>
+                  } 
+                />
 
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
+                {/* Catch-all */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </ErrorBoundary>
+          </BrowserRouter>
       </NotificationProvider>
     </AuthProvider>
+  </LanguageProvider>
   );
 }

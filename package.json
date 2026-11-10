@@ -6,6 +6,7 @@
   "scripts": {
     "dev:server": "node server/src/index.js",
     "dev:client": "vite client",
+    "build": "vite build client",
     "build:client": "vite build client",
     "test": "node tests/run-all-tests.js",
     "start": "node server/src/index.js"

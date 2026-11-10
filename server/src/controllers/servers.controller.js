@@ -60,7 +60,7 @@ function getServers(req, res) {
 }
 
 function createServer(req, res) {
-  const { name, game = 'Metin2', status = 'active', contact_info, owner_user_id, pm_user_id, logo_url, website_url, notes } = req.body;
+  const { name, game = 'Metin2', status = 'active', contact_info, owner_user_id, pm_user_id, creator_ids = [], logo_url, website_url, notes } = req.body;
 
   if (!name) {
     return res.status(400).json({ error: 'El nombre del servidor es obligatorio.' });
@@ -97,9 +97,35 @@ function createServer(req, res) {
     );
   }
 
-  logAudit(req.user.id, 'SERVER_CREATED', 'servers', serverId, { name, game, pm_user_id }, req);
+  // If creators (streamers) are assigned upon creation by Admin
+  if (Array.isArray(creator_ids) && creator_ids.length > 0) {
+    const insertCreator = db.prepare(`
+      INSERT INTO server_creators (server_id, creator_id, status)
+      VALUES (?, ?, 'active')
+    `);
+    const notifyCreator = db.prepare(`
+      INSERT INTO notifications (user_id, title, message, type, link_url)
+      VALUES (?, ?, ?, ?, ?)
+    `);
 
-  return res.status(201).json({ id: serverId, name, game, status });
+    for (const cId of creator_ids) {
+      const parsedId = parseInt(cId, 10);
+      if (parsedId) {
+        insertCreator.run(serverId, parsedId);
+        notifyCreator.run(
+          parsedId,
+          'Asignado a Servidor',
+          `Has sido asignado como streamer al servidor "${name}".`,
+          'info',
+          '/dashboard/creator'
+        );
+      }
+    }
+  }
+
+  logAudit(req.user.id, 'SERVER_CREATED', 'servers', serverId, { name, game, pm_user_id, creator_ids }, req);
+
+  return res.status(201).json({ id: serverId, name, game, status, pm_user_id, creator_ids });
 }
 
 function updateServer(req, res) {
@@ -110,6 +136,9 @@ function updateServer(req, res) {
   if (!existing) {
     return res.status(404).json({ error: 'Servidor no encontrado.' });
   }
+
+  const targetOwnerId = owner_user_id !== undefined ? (owner_user_id ? parseInt(owner_user_id, 10) : null) : existing.owner_user_id;
+  const targetPmId = pm_user_id !== undefined ? (pm_user_id ? parseInt(pm_user_id, 10) : null) : existing.pm_user_id;
 
   db.prepare(`
     UPDATE servers 
@@ -129,8 +158,8 @@ function updateServer(req, res) {
     game || null,
     status || null,
     contact_info || null,
-    owner_user_id ? parseInt(owner_user_id, 10) : null,
-    pm_user_id ? parseInt(pm_user_id, 10) : null,
+    targetOwnerId,
+    targetPmId,
     logo_url || null,
     website_url || null,
     notes || null,
@@ -185,6 +214,20 @@ function assignCreatorToServer(req, res) {
     db.prepare("UPDATE server_creators SET status = 'active' WHERE id = ?").run(existing.id);
   } else {
     db.prepare("INSERT INTO server_creators (server_id, creator_id, status) VALUES (?, ?, 'active')").run(serverId, creator_id);
+  }
+
+  const server = db.prepare('SELECT name FROM servers WHERE id = ?').get(serverId);
+  if (server) {
+    db.prepare(`
+      INSERT INTO notifications (user_id, title, message, type, link_url)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      creator_id,
+      'Asignado a Servidor',
+      `El administrador te ha asignado como streamer del servidor "${server.name}".`,
+      'info',
+      '/dashboard/creator'
+    );
   }
 
   logAudit(req.user.id, 'CREATOR_ASSIGNED_TO_SERVER', 'server_creators', serverId, { creatorId: creator_id }, req);

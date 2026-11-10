@@ -20,6 +20,7 @@ function initSchema() {
     -- Tabla de Usuarios con control de estado y borrado suave
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE,
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       full_name TEXT NOT NULL,
@@ -38,6 +39,16 @@ function initSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME NULL
+    );
+
+    -- Tabla de Códigos de Verificación de Inicio de Sesión (2FA / OTP)
+    CREATE TABLE IF NOT EXISTS login_otps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      otp_code TEXT NOT NULL,
+      expires_at DATETIME NOT NULL,
+      used INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     -- Perfil de Creador (separación estricta de datos públicos vs privados)
@@ -131,10 +142,15 @@ function initSchema() {
       evidence_screenshots TEXT DEFAULT '[]',
       creator_notes TEXT,
       internal_notes TEXT,
-      status TEXT NOT NULL DEFAULT 'review' CHECK(status IN ('pending', 'review', 'approved', 'rejected')),
+      status TEXT NOT NULL DEFAULT 'review' CHECK(status IN ('pending', 'review', 'approved', 'rejected', 'paid')),
       rejection_reason TEXT,
       reviewed_by_user_id INTEGER REFERENCES users(id),
       reviewed_at DATETIME,
+      paid_at DATETIME,
+      paid_by_user_id INTEGER REFERENCES users(id),
+      payout_amount REAL,
+      payment_reference TEXT,
+      payment_notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -163,6 +179,25 @@ function initSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Registro de Transacciones Financieras por Servidor (Ingresos por Aperturas y Gastos en PMs / Streamers)
+    CREATE TABLE IF NOT EXISTS server_financial_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK(type IN ('income', 'expense_streamer', 'expense_pm', 'expense_platform')),
+      category TEXT NOT NULL CHECK(category IN ('opening_fee', 'monthly_contract', 'campaign_budget', 'streamer_payout', 'pm_fee', 'pm_commission', 'other')),
+      concept TEXT NOT NULL,
+      amount REAL NOT NULL,
+      transaction_date DATE NOT NULL,
+      payment_reference TEXT,
+      payment_method TEXT DEFAULT 'Transferencia' CHECK(payment_method IN ('Transferencia', 'PayPal', 'Cripto / USDT', 'Tarjeta / Stripe', 'Efectivo', 'Otro')),
+      status TEXT NOT NULL DEFAULT 'completed' CHECK(status IN ('completed', 'pending')),
+      recipient_or_payer_name TEXT,
+      recipient_user_id INTEGER REFERENCES users(id),
+      notes TEXT,
+      created_by_user_id INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Configuraciones del Sistema
     CREATE TABLE IF NOT EXISTS system_settings (
       key TEXT PRIMARY KEY,
@@ -170,6 +205,78 @@ function initSchema() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Migration: Ensure username column exists in users
+  try {
+    const columns = db.prepare('PRAGMA table_info(users)').all();
+    if (!columns.some(c => c.name === 'username')) {
+      db.exec('ALTER TABLE users ADD COLUMN username TEXT;');
+    }
+  } catch (err) {
+    console.error('[DB Migration error]:', err.message);
+  }
+
+  // Migration: Ensure activity_evidences supports 'paid' status and payment columns
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(activity_evidences)").all();
+    if (tableInfo && tableInfo.length > 0) {
+      const hasPaidAt = tableInfo.some(col => col.name === 'paid_at');
+      const createSqlRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='activity_evidences'").get();
+      const needsMigration = !hasPaidAt || (createSqlRow && !createSqlRow.sql.includes("'paid'"));
+
+      if (needsMigration) {
+        db.exec("PRAGMA foreign_keys = OFF;");
+        db.exec(`
+          CREATE TABLE activity_evidences_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE RESTRICT,
+            creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+            type TEXT NOT NULL CHECK(type IN ('stream', 'video', 'post', 'event')),
+            platform TEXT NOT NULL CHECK(platform IN ('Twitch', 'YouTube', 'TikTok', 'Kick', 'Facebook', 'Discord', 'Otro')),
+            content_url TEXT NOT NULL,
+            activity_date DATE NOT NULL,
+            duration_minutes INTEGER DEFAULT 0,
+            avg_viewers INTEGER DEFAULT 0,
+            peak_viewers INTEGER DEFAULT 0,
+            total_views INTEGER DEFAULT 0,
+            evidence_screenshots TEXT DEFAULT '[]',
+            creator_notes TEXT,
+            internal_notes TEXT,
+            status TEXT NOT NULL DEFAULT 'review' CHECK(status IN ('pending', 'review', 'approved', 'rejected', 'paid')),
+            rejection_reason TEXT,
+            reviewed_by_user_id INTEGER REFERENCES users(id),
+            reviewed_at DATETIME,
+            paid_at DATETIME,
+            paid_by_user_id INTEGER REFERENCES users(id),
+            payout_amount REAL,
+            payment_reference TEXT,
+            payment_notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+
+          INSERT INTO activity_evidences_new (
+            id, campaign_id, creator_id, type, platform, content_url, activity_date,
+            duration_minutes, avg_viewers, peak_viewers, total_views, evidence_screenshots,
+            creator_notes, internal_notes, status, rejection_reason, reviewed_by_user_id,
+            reviewed_at, created_at, updated_at
+          )
+          SELECT 
+            id, campaign_id, creator_id, type, platform, content_url, activity_date,
+            duration_minutes, avg_viewers, peak_viewers, total_views, evidence_screenshots,
+            creator_notes, internal_notes, status, rejection_reason, reviewed_by_user_id,
+            reviewed_at, created_at, updated_at
+          FROM activity_evidences;
+
+          DROP TABLE activity_evidences;
+          ALTER TABLE activity_evidences_new RENAME TO activity_evidences;
+        `);
+        db.exec("PRAGMA foreign_keys = ON;");
+      }
+    }
+  } catch (err) {
+    console.error('[DB Migration activity_evidences error]:', err.message);
+  }
 }
 
 module.exports = {

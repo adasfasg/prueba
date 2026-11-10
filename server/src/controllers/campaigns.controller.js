@@ -13,9 +13,9 @@ function getCampaigns(req, res) {
       pm.full_name as pm_name, pm.email as pm_email,
       (SELECT COUNT(*) FROM campaign_creators cc WHERE cc.campaign_id = c.id) as creators_count,
       (SELECT COUNT(*) FROM activity_evidences ae WHERE ae.campaign_id = c.id) as total_evidences_count,
-      (SELECT COUNT(*) FROM activity_evidences ae WHERE ae.campaign_id = c.id AND ae.status = 'approved') as approved_evidences_count,
-      (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae WHERE ae.campaign_id = c.id AND ae.status = 'approved') as campaign_views,
-      (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae WHERE ae.campaign_id = c.id AND ae.status = 'approved') as campaign_duration_minutes
+      (SELECT COUNT(*) FROM activity_evidences ae WHERE ae.campaign_id = c.id AND ae.status IN ('approved', 'paid')) as approved_evidences_count,
+      (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae WHERE ae.campaign_id = c.id AND ae.status IN ('approved', 'paid')) as campaign_views,
+      (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae WHERE ae.campaign_id = c.id AND ae.status IN ('approved', 'paid')) as campaign_duration_minutes
     FROM campaigns c
     JOIN servers s ON c.server_id = s.id
     LEFT JOIN users pm ON c.pm_user_id = pm.id
@@ -75,7 +75,7 @@ function getCampaigns(req, res) {
 
 function createCampaign(req, res) {
   const { role, id: userId } = req.user;
-  const { name, server_id, pm_user_id, status = 'active', start_date, end_date, objective, requirements, budget_internal, notes } = req.body;
+  const { name, server_id, pm_user_id, creator_ids = [], status = 'active', start_date, end_date, objective, requirements, budget_internal, notes } = req.body;
 
   if (!name || !server_id) {
     return res.status(400).json({ error: 'El nombre de la campaña y el servidor son obligatorios.' });
@@ -111,18 +111,56 @@ function createCampaign(req, res) {
 
   const campaignId = Number(result.lastInsertRowid);
 
-  logAudit(userId, 'CAMPAIGN_CREATED', 'campaigns', campaignId, { name, serverId: server_id }, req);
+  // If creators were selected to be actioned upon campaign creation:
+  if (Array.isArray(creator_ids) && creator_ids.length > 0) {
+    const insertCampCreator = db.prepare(`
+      INSERT INTO campaign_creators (campaign_id, creator_id, agreement_terms, payout_internal)
+      VALUES (?, ?, ?, ?)
+    `);
+    const notifyCreator = db.prepare(`
+      INSERT INTO notifications (user_id, title, message, type, link_url)
+      VALUES (?, ?, ?, ?, ?)
+    `);
 
-  return res.status(201).json({ id: campaignId, name, server_id, status });
+    for (const cId of creator_ids) {
+      const parsedCid = parseInt(cId, 10);
+      if (parsedCid) {
+        insertCampCreator.run(campaignId, parsedCid, 'Campaña iniciada', 0);
+        notifyCreator.run(
+          parsedCid,
+          'Nueva Campaña Asignada',
+          `Has sido accionado para participar en la campaña "${name.trim()}".`,
+          'info',
+          '/dashboard/streamer'
+        );
+      }
+    }
+  }
+
+  logAudit(userId, 'CAMPAIGN_CREATED', 'campaigns', campaignId, { name, serverId: server_id, creator_ids }, req);
+
+  return res.status(201).json({ id: campaignId, name, server_id, status, creator_ids });
 }
 
 function updateCampaign(req, res) {
   const campaignId = parseInt(req.params.id, 10);
+  const { role, id: userId } = req.user;
   const { name, status, start_date, end_date, objective, requirements, budget_internal, notes } = req.body;
 
-  const existing = db.prepare('SELECT * FROM campaigns WHERE id = ? AND deleted_at IS NULL').get(campaignId);
+  const existing = db.prepare(`
+    SELECT c.*, s.pm_user_id as server_pm_id
+    FROM campaigns c
+    JOIN servers s ON c.server_id = s.id
+    WHERE c.id = ? AND c.deleted_at IS NULL
+  `).get(campaignId);
+
   if (!existing) {
     return res.status(404).json({ error: 'Campaña no encontrada.' });
+  }
+
+  // If PM, check ownership
+  if (role === 'pm' && existing.pm_user_id !== userId && existing.server_pm_id !== userId) {
+    return res.status(403).json({ error: 'No tienes permiso para modificar esta campaña.' });
   }
 
   db.prepare(`
@@ -157,9 +195,25 @@ function updateCampaign(req, res) {
 function assignCreatorToCampaign(req, res) {
   const campaignId = parseInt(req.params.id, 10);
   const { creator_id, agreement_terms, payout_internal } = req.body;
+  const { role, id: userId } = req.user;
 
   if (!creator_id) {
     return res.status(400).json({ error: 'creator_id es obligatorio.' });
+  }
+
+  const campaign = db.prepare(`
+    SELECT c.*, s.pm_user_id as server_pm_id
+    FROM campaigns c
+    JOIN servers s ON c.server_id = s.id
+    WHERE c.id = ? AND c.deleted_at IS NULL
+  `).get(campaignId);
+
+  if (!campaign) {
+    return res.status(404).json({ error: 'Campaña no encontrada.' });
+  }
+
+  if (role === 'pm' && campaign.pm_user_id !== userId && campaign.server_pm_id !== userId) {
+    return res.status(403).json({ error: 'No tienes permiso para accionar streamers en esta campaña.' });
   }
 
   const existing = db.prepare('SELECT id FROM campaign_creators WHERE campaign_id = ? AND creator_id = ?').get(campaignId, creator_id);
@@ -177,7 +231,6 @@ function assignCreatorToCampaign(req, res) {
   }
 
   // Notify creator
-  const campaign = db.prepare('SELECT name FROM campaigns WHERE id = ?').get(campaignId);
   db.prepare(`
     INSERT INTO notifications (user_id, title, message, type, link_url)
     VALUES (?, ?, ?, ?, ?)
@@ -186,17 +239,33 @@ function assignCreatorToCampaign(req, res) {
     'Nueva Campaña Asignada',
     `Has sido incorporado a la campaña "${campaign.name}". Consulta los requisitos y actividades pendientes.`,
     'info',
-    '/dashboard/creator?tab=campaigns'
+    '/dashboard/streamer'
   );
 
   logAudit(req.user.id, 'CREATOR_ASSIGNED_TO_CAMPAIGN', 'campaign_creators', campaignId, { creatorId: creator_id }, req);
 
-  return res.json({ message: 'Creador asignado a la campaña con éxito.' });
+  return res.json({ message: 'Creador accionado a la campaña con éxito.' });
 }
 
 function removeCreatorFromCampaign(req, res) {
   const campaignId = parseInt(req.params.id, 10);
   const creatorId = parseInt(req.params.creatorId, 10);
+  const { role, id: userId } = req.user;
+
+  const campaign = db.prepare(`
+    SELECT c.*, s.pm_user_id as server_pm_id
+    FROM campaigns c
+    JOIN servers s ON c.server_id = s.id
+    WHERE c.id = ? AND c.deleted_at IS NULL
+  `).get(campaignId);
+
+  if (!campaign) {
+    return res.status(404).json({ error: 'Campaña no encontrada.' });
+  }
+
+  if (role === 'pm' && campaign.pm_user_id !== userId && campaign.server_pm_id !== userId) {
+    return res.status(403).json({ error: 'No tienes permiso para desvincular streamers de esta campaña.' });
+  }
 
   db.prepare('DELETE FROM campaign_creators WHERE campaign_id = ? AND creator_id = ?').run(campaignId, creatorId);
 
@@ -205,10 +274,26 @@ function removeCreatorFromCampaign(req, res) {
   return res.json({ message: 'Creador desvinculado de la campaña.' });
 }
 
+function deleteCampaign(req, res) {
+  const campaignId = parseInt(req.params.id, 10);
+
+  const existing = db.prepare('SELECT * FROM campaigns WHERE id = ? AND deleted_at IS NULL').get(campaignId);
+  if (!existing) {
+    return res.status(404).json({ error: 'Campaña no encontrada.' });
+  }
+
+  db.prepare("UPDATE campaigns SET deleted_at = CURRENT_TIMESTAMP, status = 'completed' WHERE id = ?").run(campaignId);
+
+  logAudit(req.user.id, 'CAMPAIGN_DELETED', 'campaigns', campaignId, { name: existing.name }, req);
+
+  return res.json({ message: 'Campaña eliminada correctamente.' });
+}
+
 module.exports = {
   getCampaigns,
   createCampaign,
   updateCampaign,
+  deleteCampaign,
   assignCreatorToCampaign,
   removeCreatorFromCampaign
 };

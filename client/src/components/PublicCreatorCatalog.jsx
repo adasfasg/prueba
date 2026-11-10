@@ -27,7 +27,7 @@ export default function PublicCreatorCatalog({ onSelectCreatorForContact }) {
         const res = await fetch(`/api/public/creators?${queryParams.toString()}`);
         if (res.ok) {
           const data = await res.json();
-          setCreators(data);
+          setCreators(Array.isArray(data) ? data : []);
         }
       } catch (err) {
         console.error('Error fetching public creators:', err);
@@ -39,11 +39,13 @@ export default function PublicCreatorCatalog({ onSelectCreatorForContact }) {
     loadCreators();
   }, [selectedGame, selectedPlatform, onlyAvailable]);
 
-  // Client-side search filtering
+  // Client-side search filtering con protección contra valores undefined/null
   const filtered = creators.filter(c => {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
-    return c.alias.toLowerCase().includes(term) || (c.bio && c.bio.toLowerCase().includes(term));
+    const aliasMatches = c?.alias ? c.alias.toLowerCase().includes(term) : false;
+    const bioMatches = c?.bio ? c.bio.toLowerCase().includes(term) : false;
+    return aliasMatches || bioMatches;
   });
 
   return (
@@ -149,106 +151,139 @@ export default function PublicCreatorCatalog({ onSelectCreatorForContact }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filtered.map(creator => (
-              <div 
-                key={creator.id}
-                className="bg-slate-900/80 hover:bg-slate-900 border border-slate-800/80 hover:border-amber-500/40 rounded-2xl p-6 transition-all duration-300 hover:shadow-2xl hover:shadow-amber-500/5 flex flex-col justify-between group"
-              >
-                <div>
-                  {/* Top Header: Avatar + Status */}
-                  <div className="flex items-start gap-4">
-                    <div className="relative">
-                      <img
-                        src={creator.avatar_url || 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=200'}
-                        alt={creator.alias}
-                        className="w-16 h-16 rounded-2xl object-cover border-2 border-slate-700 group-hover:border-amber-400/80 transition-colors shadow-md"
-                      />
-                      <span 
-                        className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-slate-900 ${
-                          creator.is_available ? 'bg-emerald-400' : 'bg-amber-400'
-                        }`}
-                        title={creator.is_available ? 'Disponible para campañas' : 'Ocupado en campaña activa'}
-                      />
+            {filtered.map(creator => {
+              // Parseo seguro de arreglos u objetos que vengan como string JSON o valores nulos
+              const parseSafeArray = (val) => {
+                if (Array.isArray(val)) return val;
+                if (typeof val === 'string') {
+                  try {
+                    const parsed = JSON.parse(val);
+                    return Array.isArray(parsed) ? parsed : [];
+                  } catch (e) {
+                    return [];
+                  }
+                }
+                return [];
+              };
+
+              const parseSafeObject = (val) => {
+                if (val && typeof val === 'object' && !Array.isArray(val)) return val;
+                if (typeof val === 'string') {
+                  try {
+                    const parsed = JSON.parse(val);
+                    return parsed && typeof parsed === 'object' ? parsed : {};
+                  } catch (e) {
+                    return {};
+                  }
+                }
+                return {};
+              };
+
+              const safeGames = parseSafeArray(creator?.games);
+              const safePlatforms = parseSafeArray(creator?.platforms);
+              const safeSocialLinks = parseSafeObject(creator?.social_links);
+
+              return (
+                <div 
+                  key={creator.id}
+                  className="bg-slate-900/80 hover:bg-slate-900 border border-slate-800/80 hover:border-amber-500/40 rounded-2xl p-6 transition-all duration-300 hover:shadow-2xl hover:shadow-amber-500/5 flex flex-col justify-between group"
+                >
+                  <div>
+                    {/* Top Header: Avatar + Status */}
+                    <div className="flex items-start gap-4">
+                      <div className="relative">
+                        <img
+                          src={creator.avatar_url || 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=200'}
+                          alt={creator.alias || 'Creador'}
+                          className="w-16 h-16 rounded-2xl object-cover border-2 border-slate-700 group-hover:border-amber-400/80 transition-colors shadow-md"
+                        />
+                        <span 
+                          className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-slate-900 ${
+                            creator.is_available ? 'bg-emerald-400' : 'bg-amber-400'
+                          }`}
+                          title={creator.is_available ? 'Disponible para campañas' : 'Ocupado en campaña activa'}
+                        />
+                      </div>
+
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-lg font-bold text-white group-hover:text-amber-300 transition-colors">
+                            {creator.alias || 'Sin Alias'}
+                          </h3>
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                            creator.is_available 
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                              : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                          }`}>
+                            {creator.is_available ? 'Disponible' : 'Campaña en curso'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-bold text-white group-hover:text-amber-300 transition-colors">
-                          {creator.alias}
-                        </h3>
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                          creator.is_available 
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                        }`}>
-                          {creator.is_available ? 'Disponible' : 'Campaña en curso'}
+                    {/* Bio */}
+                    <p className="mt-4 text-xs text-slate-300 line-clamp-3 leading-relaxed">
+                      {creator.bio || 'Sin descripción disponible.'}
+                    </p>
+
+                    {/* Games & Platforms Tags Seguros */}
+                    <div className="mt-4 flex flex-wrap gap-1.5">
+                      {safeGames.map((g, idx) => (
+                        <span key={`game-${idx}`} className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-300 rounded-md border border-amber-500/20">
+                          {g}
                         </span>
-                      </div>
+                      ))}
+                      {safePlatforms.map((p, idx) => (
+                        <span key={`plat-${idx}`} className="px-2 py-0.5 text-[10px] font-semibold bg-slate-800 text-slate-300 rounded-md">
+                          {p}
+                        </span>
+                      ))}
                     </div>
                   </div>
 
-                  {/* Bio */}
-                  <p className="mt-4 text-xs text-slate-300 line-clamp-3 leading-relaxed">
-                    {creator.bio}
-                  </p>
+                  {/* Bottom Footer: Social Links + Action */}
+                  <div className="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between">
+                    {/* Social icons */}
+                    <div className="flex items-center gap-2">
+                      {safeSocialLinks.twitch && (
+                        <a 
+                          href={safeSocialLinks.twitch} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-purple-950/40 text-purple-400 hover:text-purple-300 border border-slate-800 transition-all"
+                          title="Ver Canal de Twitch"
+                        >
+                          <Tv className="w-4 h-4" />
+                        </a>
+                      )}
+                      {safeSocialLinks.youtube && (
+                        <a 
+                          href={safeSocialLinks.youtube} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-red-950/40 text-red-400 hover:text-red-300 border border-slate-800 transition-all"
+                          title="Ver Canal de YouTube"
+                        >
+                          <Video className="w-4 h-4" />
+                        </a>
+                      )}
+                    </div>
 
-                  {/* Games Tags */}
-                  <div className="mt-4 flex flex-wrap gap-1.5">
-                    {creator.games.map(g => (
-                      <span key={g} className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-300 rounded-md border border-amber-500/20">
-                        {g}
-                      </span>
-                    ))}
-                    {creator.platforms.map(p => (
-                      <span key={p} className="px-2 py-0.5 text-[10px] font-semibold bg-slate-800 text-slate-300 rounded-md">
-                        {p}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Bottom Footer: Social Links + Action */}
-                <div className="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between">
-                  {/* Social icons */}
-                  <div className="flex items-center gap-2">
-                    {creator.social_links.twitch && (
-                      <a 
-                        href={creator.social_links.twitch} 
-                        target="_blank" 
-                        rel="noreferrer" 
-                        className="p-1.5 rounded-lg bg-slate-950 hover:bg-purple-950/40 text-purple-400 hover:text-purple-300 border border-slate-800 transition-all"
-                        title="Ver Canal de Twitch"
-                      >
-                        <Tv className="w-4 h-4" />
-                      </a>
-                    )}
-                    {creator.social_links.youtube && (
-                      <a 
-                        href={creator.social_links.youtube} 
-                        target="_blank" 
-                        rel="noreferrer" 
-                        className="p-1.5 rounded-lg bg-slate-950 hover:bg-red-950/40 text-red-400 hover:text-red-300 border border-slate-800 transition-all"
-                        title="Ver Canal de YouTube"
-                      >
-                        <Video className="w-4 h-4" />
-                      </a>
-                    )}
+                    {/* Request creator button */}
+                    <button
+                      onClick={() => onSelectCreatorForContact && onSelectCreatorForContact(creator)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-slate-950 border border-amber-500/30 hover:border-amber-400 text-xs font-bold rounded-xl transition-all"
+                    >
+                      <span>Contratar</span>
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
                   </div>
 
-                  {/* Request creator button */}
-                  <button
-                    onClick={() => onSelectCreatorForContact(creator)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-slate-950 border border-amber-500/30 hover:border-amber-400 text-xs font-bold rounded-xl transition-all"
-                  >
-                    <span>Contratar</span>
-                    <Send className="w-3.5 h-3.5" />
-                  </button>
                 </div>
-
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

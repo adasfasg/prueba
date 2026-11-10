@@ -1,13 +1,58 @@
 const bcrypt = require('bcryptjs');
 const { db, initSchema } = require('./db');
 
+function seedFinancialTransactions(targetDb) {
+  try {
+    const finCount = targetDb.prepare('SELECT COUNT(*) as count FROM server_financial_transactions').get();
+    if (finCount && finCount.count > 0) {
+      return;
+    }
+
+    const insertFin = targetDb.prepare(`
+      INSERT INTO server_financial_transactions (
+        server_id, type, category, concept, amount, transaction_date, payment_reference,
+        payment_method, status, recipient_or_payer_name, recipient_user_id, notes, created_by_user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // Astra2: Ingreso de apertura + Gasto de PM
+    insertFin.run(
+      1, 'income', 'opening_fee', 'Fee de Apertura Oficial y Setup Astra2', 2500.00,
+      '2026-09-01', 'INV-ASTRA2-001', 'Cripto / USDT', 'completed', 'Roberto Díaz (Owner Astra2)', null,
+      'Pago completo por paquete de apertura y marketing inicial.', 1
+    );
+    insertFin.run(
+      1, 'expense_pm', 'pm_fee', 'Honorarios de Coordinación PM - Carlos Mendoza', 350.00,
+      '2026-09-05', 'PM-PAY-001', 'Transferencia', 'completed', 'Carlos Mendoza (PM)', 5,
+      'Compensación mensual por supervisión operativa de Astra2.', 1
+    );
+
+    // Metin2 Origin: Ingreso de apertura + Gasto de PM
+    insertFin.run(
+      2, 'income', 'opening_fee', 'Fee de Apertura y Campaña Lanzamiento Metin2 Origin', 1800.00,
+      '2026-09-02', 'INV-ORIGIN-001', 'Transferencia', 'completed', 'Gabriel Vega (Owner Origin)', null,
+      'Contrato inicial de apertura de servidor.', 1
+    );
+    insertFin.run(
+      2, 'expense_pm', 'pm_fee', 'Honorarios de Coordinación PM - Elena Morales', 280.00,
+      '2026-09-06', 'PM-PAY-002', 'Transferencia', 'completed', 'Elena Morales (PM)', 6,
+      'Compensación por gestión de campaña y creadores de Metin2 Origin.', 1
+    );
+
+    console.log('[Seed] Populated server_financial_transactions with initial seed records.');
+  } catch (err) {
+    console.error('[Seed] Error seeding financial transactions:', err.message);
+  }
+}
+
 function seedDatabase() {
   initSchema();
 
   // Check if users already exist
   const existingUsers = db.prepare('SELECT COUNT(*) as count FROM users').get();
   if (existingUsers && existingUsers.count > 0) {
-    console.log('[Seed] Database already contains users. Skipping seed.');
+    seedFinancialTransactions(db);
+    console.log('[Seed] Database already contains users. Skipping main seed.');
     return;
   }
 
@@ -25,42 +70,42 @@ function seedDatabase() {
   const ownerPass = bcrypt.hashSync('PMForgeX2026!Owner', salt);
 
   const insertUser = db.prepare(`
-    INSERT INTO users (id, email, password_hash, full_name, role, status, phone, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (id, username, email, password_hash, full_name, role, status, phone, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   // 1. Super Admin
-  insertUser.run(1, 'admin@pmforgex.com', adminPass, 'Director General (Super Admin)', 'super_admin', 'active', '+34 600 000 001', 'Cuenta principal del dueño. Protegida contra eliminación.');
+  insertUser.run(1, 'admin', 'admin@pmforgex.com', adminPass, 'Director General (Super Admin)', 'super_admin', 'active', '+34 600 000 001', 'Cuenta principal del dueño. Protegida contra eliminación.');
   
   // 2. Director Operacional
-  insertUser.run(2, 'operaciones@pmforgex.com', opsPass, 'Marcos Valero (Dir. Operacional)', 'director_ops', 'active', '+34 600 000 002', 'Supervisa la operativa global de campañas y clientes.');
+  insertUser.run(2, 'operaciones', 'operaciones@pmforgex.com', opsPass, 'Marcos Valero (Dir. Operacional)', 'director_ops', 'active', '+34 600 000 002', 'Supervisa la operativa global de campañas y clientes.');
   
   // 3. Director de PMs
-  insertUser.run(3, 'director.pm@pmforgex.com', dirPmsPass, 'Sofía Ramos (Dir. PMs)', 'director_pms', 'active', '+34 600 000 003', 'Supervisa el equipo de Promoter Managers.');
+  insertUser.run(3, 'director.pm', 'director.pm@pmforgex.com', dirPmsPass, 'Sofía Ramos (Dir. PMs)', 'director_pms', 'active', '+34 600 000 003', 'Supervisa el equipo de Promoter Managers.');
   
   // 4. Director de Creadores
-  insertUser.run(4, 'director.creadores@pmforgex.com', dirCrPass, 'Alejandro Sanz (Dir. Creadores)', 'director_creators', 'active', '+34 600 000 004', 'Supervisa el talento y catálogo de creadores.');
+  insertUser.run(4, 'director.creadores', 'director.creadores@pmforgex.com', dirCrPass, 'Alejandro Sanz (Dir. Creadores)', 'director_creators', 'active', '+34 600 000 004', 'Supervisa el talento y catálogo de creadores.');
   
   // 5. PM 1 (Carlos)
-  insertUser.run(5, 'pm.carlos@pmforgex.com', pm1Pass, 'Carlos Rodríguez (PM Senior)', 'pm', 'active', '+34 600 000 005', 'Promoter Manager asignado a servidores veteranos.');
+  insertUser.run(5, 'pm.carlos', 'pm.carlos@pmforgex.com', pm1Pass, 'Carlos Rodríguez (PM Senior)', 'pm', 'active', '+34 600 000 005', 'Promoter Manager asignado a servidores veteranos.');
 
   // 6. PM 2 (Elena)
-  insertUser.run(6, 'pm.elena@pmforgex.com', pm2Pass, 'Elena Gómez (PM Junior)', 'pm', 'active', '+34 600 000 006', 'Promoter Manager asignada a nuevos lanzamientos.');
+  insertUser.run(6, 'pm.elena', 'pm.elena@pmforgex.com', pm2Pass, 'Elena Gómez (PM Junior)', 'pm', 'active', '+34 600 000 006', 'Promoter Manager asignada a nuevos lanzamientos.');
 
   // 7. Creador 1 (DragonSlayer MT2)
-  insertUser.run(7, 'creador.dragonslayer@pmforgex.com', creatorPass, 'Álvaro Martín (DragonSlayer MT2)', 'creator', 'active', '+34 600 000 007', 'Streamer veterano especialista en PvP y Gremios.');
+  insertUser.run(7, 'dragonslayer', 'creador.dragonslayer@pmforgex.com', creatorPass, 'Álvaro Martín (DragonSlayer MT2)', 'creator', 'active', '+34 600 000 007', 'Streamer veterano especialista en PvP y Gremios.');
 
   // 8. Creador 2 (ValquiriaPlay)
-  insertUser.run(8, 'creador.valquiria@pmforgex.com', creatorPass, 'Lucía Serrano (ValquiriaPlay)', 'creator', 'active', '+34 600 000 008', 'Creadora de contenido en directo, tutoriales y PvE.');
+  insertUser.run(8, 'valquiria', 'creador.valquiria@pmforgex.com', creatorPass, 'Lucía Serrano (ValquiriaPlay)', 'creator', 'active', '+34 600 000 008', 'Creadora de contenido en directo, tutoriales y PvE.');
 
   // 9. Creador 3 (MetinKing)
-  insertUser.run(9, 'creador.metinking@pmforgex.com', creatorPass, 'Javier Castro (MetinKing)', 'creator', 'active', '+34 600 000 009', 'Especialista en YouTube Shorts y TikTok viral de Metin2.');
+  insertUser.run(9, 'metinking', 'creador.metinking@pmforgex.com', creatorPass, 'Javier Castro (MetinKing)', 'creator', 'active', '+34 600 000 009', 'Especialista en YouTube Shorts y TikTok viral de Metin2.');
 
   // 10. Dueño de Servidor 1 (Astra2)
-  insertUser.run(10, 'owner.metinclassic@pmforgex.com', ownerPass, 'Roberto Díaz (Owner Astra2)', 'server_owner', 'active', '+34 600 000 010', 'Administrador del servidor privado Astra2 Classic.');
+  insertUser.run(10, 'owner.astra2', 'owner.metinclassic@pmforgex.com', ownerPass, 'Roberto Díaz (Owner Astra2)', 'server_owner', 'active', '+34 600 000 010', 'Administrador del servidor privado Astra2 Classic.');
 
   // 11. Dueño de Servidor 2 (Metin2 Origin)
-  insertUser.run(11, 'owner.origin@pmforgex.com', ownerPass, 'Gabriel Vega (Owner Origin)', 'server_owner', 'active', '+34 600 000 011', 'Propietario del servidor Metin2 Origin 2026.');
+  insertUser.run(11, 'owner.origin', 'owner.origin@pmforgex.com', ownerPass, 'Gabriel Vega (Owner Origin)', 'server_owner', 'active', '+34 600 000 011', 'Propietario del servidor Metin2 Origin 2026.');
 
   // Insert Creator Profiles
   const insertProfile = db.prepare(`
@@ -313,6 +358,9 @@ function seedDatabase() {
   insertNotif.run(1, 'Alerta de Servidor', 'El servidor OldSchool World Mt2 no tiene un PM asignado.', 'warning', 0, '/dashboard/admin?tab=servers');
   insertNotif.run(5, 'Nueva Evidencia para Revisar', 'ValquiriaPlay ha subido una nueva evidencia para la campaña Astra2.', 'info', 0, '/dashboard/pm?tab=review');
   insertNotif.run(10, 'Resultados Actualizados', 'Se ha aprobado una nueva transmisión con 512 espectadores pico para Astra2.', 'success', 0, '/dashboard/server-owner');
+
+  // Seed financial transactions if needed
+  seedFinancialTransactions(db);
 
   console.log('[Seed] Database successfully populated with initial test suite data.');
 }
