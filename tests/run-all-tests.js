@@ -1,3 +1,12 @@
+const path = require('node:path');
+const fs = require('node:fs');
+
+const testDbPath = path.join(__dirname, '../data/test_pmforgex.db');
+try { if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath); } catch (e) {}
+try { if (fs.existsSync(`${testDbPath}-wal`)) fs.unlinkSync(`${testDbPath}-wal`); } catch (e) {}
+try { if (fs.existsSync(`${testDbPath}-shm`)) fs.unlinkSync(`${testDbPath}-shm`); } catch (e) {}
+process.env.DB_PATH = testDbPath;
+
 const http = require('node:http');
 const app = require('../server/src/app');
 const { seedDatabase } = require('../server/src/seed');
@@ -628,6 +637,78 @@ async function runTests() {
       games: ['Metin2'],
       platforms: ['Twitch', 'YouTube', 'TikTok']
     }, adminToken);
+
+    // 13. EXCLUSIVIDAD SUPER ADMIN: SUSPENDER, REACTIVAR Y ELIMINAR SERVIDORES
+    console.log('\n--- 13. Exclusividad Super Admin: Suspender, Reactivar y Eliminar Servidores ---');
+
+    // 13.1 Crear un servidor de pruebas con PM Carlos y Creador DragonSlayer
+    const createSrvRes = await makeRequest('POST', '/api/servers', {
+      name: 'Metin2 Nexus QA',
+      game: 'Metin2',
+      status: 'active',
+      contact_info: 'nexus@metin2.com',
+      owner_user_id: 8, // owner.astra2
+      pm_user_id: 5,    // pm.carlos
+      creator_ids: [7]  // dragonslayer
+    }, adminToken);
+    assert(createSrvRes.status === 201, 'SUPER ADMIN: Crea servidor "Metin2 Nexus QA" con status activo (201 Created)');
+    const testServerId = createSrvRes.data.id;
+
+    // 13.2 PM intenta suspender el servidor por endpoint directo -> 403 Forbidden
+    const pmSuspendStatusRes = await makeRequest('PUT', `/api/servers/${testServerId}/status`, {
+      status: 'suspended'
+    }, pmToken);
+    assert(pmSuspendStatusRes.status === 403, 'SEGURIDAD RBAC: PM tiene PROHIBIDO suspender servidor por /status (403 Forbidden)');
+
+    // 13.3 PM intenta suspender el servidor por updateServer general -> 403 Forbidden
+    const pmSuspendUpdateRes = await makeRequest('PUT', `/api/servers/${testServerId}`, {
+      status: 'suspended'
+    }, pmToken);
+    assert(pmSuspendUpdateRes.status === 403, 'SEGURIDAD RBAC: PM tiene PROHIBIDO cambiar status a suspended en updateServer (403 Forbidden)');
+
+    // 13.4 PM intenta eliminar el servidor -> 403 Forbidden
+    const pmDeleteRes = await makeRequest('DELETE', `/api/servers/${testServerId}`, null, pmToken);
+    assert(pmDeleteRes.status === 403, 'SEGURIDAD RBAC: PM tiene PROHIBIDO eliminar servidor (403 Forbidden)');
+
+    // 13.5 Server Owner intenta suspender el servidor -> 403 Forbidden
+    const ownerSuspendRes = await makeRequest('PUT', `/api/servers/${testServerId}/status`, {
+      status: 'suspended'
+    }, ownerToken);
+    assert(ownerSuspendRes.status === 403, 'SEGURIDAD RBAC: Server Owner tiene PROHIBIDO suspender servidor (403 Forbidden)');
+
+    // 13.6 Creator intenta eliminar el servidor -> 403 Forbidden
+    const creatorDeleteRes = await makeRequest('DELETE', `/api/servers/${testServerId}`, null, creatorToken);
+    assert(creatorDeleteRes.status === 403, 'SEGURIDAD RBAC: Creator tiene PROHIBIDO eliminar servidor (403 Forbidden)');
+
+    // 13.7 Super Admin suspende el servidor exitosamente
+    const adminSuspendRes = await makeRequest('PUT', `/api/servers/${testServerId}/status`, {
+      status: 'suspended'
+    }, adminToken);
+    assert(adminSuspendRes.status === 200 && adminSuspendRes.data.status === 'suspended', 'SUPER ADMIN: Suspende servidor exitosamente (200 OK)');
+
+    // 13.8 Intentar crear campaña en servidor suspendido -> 400 Bad Request
+    const campOnSuspended = await makeRequest('POST', '/api/campaigns', {
+      name: 'Campaña en Servidor Suspendido',
+      server_id: testServerId,
+      start_date: '2026-11-10',
+      end_date: '2026-11-20'
+    }, pmToken);
+    assert(campOnSuspended.status === 400, 'PROTECCIÓN: Creación de campaña rechazada en servidor suspendido (400 Bad Request)');
+
+    // 13.9 Super Admin reactiva el servidor exitosamente
+    const adminReactivateRes = await makeRequest('PUT', `/api/servers/${testServerId}/status`, {
+      status: 'active'
+    }, adminToken);
+    assert(adminReactivateRes.status === 200 && adminReactivateRes.data.status === 'active', 'SUPER ADMIN: Reactiva servidor exitosamente (200 OK)');
+
+    // 13.10 Super Admin elimina el servidor (Soft Delete)
+    const adminDeleteRes = await makeRequest('DELETE', `/api/servers/${testServerId}`, null, adminToken);
+    assert(adminDeleteRes.status === 200, 'SUPER ADMIN: Elimina servidor exitosamente (Soft Delete 200 OK)');
+
+    // 13.11 Verificar que el servidor eliminado ya no aparece en GET /api/servers
+    const allServersRes = await makeRequest('GET', '/api/servers', null, adminToken);
+    const serverStillPresent = allServersRes.data.some(s => s.id === testServerId);
+    assert(!serverStillPresent, 'PERSISTENCIA: Servidor eliminado no figura en listado activo');
 
   } catch (err) {
     console.error('Error durante ejecución de pruebas:', err);

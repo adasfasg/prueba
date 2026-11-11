@@ -8,6 +8,12 @@ function seedFinancialTransactions(targetDb) {
       return;
     }
 
+    // Only seed mock financial transactions if mock servers 1 and 2 exist
+    const serversExist = targetDb.prepare('SELECT COUNT(*) as count FROM servers WHERE id IN (1, 2)').get();
+    if (!serversExist || serversExist.count < 2) {
+      return;
+    }
+
     const insertFin = targetDb.prepare(`
       INSERT INTO server_financial_transactions (
         server_id, type, category, concept, amount, transaction_date, payment_reference,

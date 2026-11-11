@@ -8,7 +8,7 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = path.join(dataDir, 'pmforgex.db');
+const dbPath = process.env.DB_PATH || path.join(dataDir, 'pmforgex.db');
 const db = new DatabaseSync(dbPath);
 
 // Enable foreign keys and WAL mode for reliability and performance

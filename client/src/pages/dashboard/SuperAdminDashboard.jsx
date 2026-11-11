@@ -256,6 +256,55 @@ export default function SuperAdminDashboard() {
     }
   };
 
+  // Handle Toggle Suspend / Reactivate Server (Super Admin Exclusive)
+  const handleToggleSuspendServer = async (server) => {
+    const isSuspended = server.status === 'suspended';
+    const actionText = isSuspended ? 'reactivar' : 'suspender';
+    if (!confirm(`¿Estás seguro de que deseas ${actionText} el servidor "${server.name}"?`)) return;
+
+    try {
+      const targetStatus = isSuspended ? 'active' : 'suspended';
+      const res = await fetch(`/api/servers/${server.id}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: targetStatus })
+      });
+      if (res.ok) {
+        fetchData();
+      } else {
+        const err = await res.json();
+        alert(err.error || `Error al ${actionText} servidor`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error de conexión.');
+    }
+  };
+
+  // Handle Delete Server (Super Admin Exclusive)
+  const handleDeleteServer = async (server) => {
+    if (!confirm(`⚠️ ATENCIÓN: ¿Estás seguro de que deseas eliminar permanentemente el servidor "${server.name}"?\n\nEsta acción cancelará sus campañas y asignaciones de streamers.`)) return;
+
+    try {
+      const res = await fetch(`/api/servers/${server.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        fetchData();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Error al eliminar servidor');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error de conexión.');
+    }
+  };
+
   // Handle Create Campaign (Admin)
   const handleCreateCampaignSubmit = async (e) => {
     e.preventDefault();
@@ -1330,10 +1379,14 @@ export default function SuperAdminDashboard() {
                       <span className="text-[11px] text-amber-400 font-semibold">{server.game || 'Metin2'}</span>
                     </div>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                    server.status === 'active' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                    server.status === 'active' 
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                      : server.status === 'suspended'
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/30'
+                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                   }`}>
-                    {server.status}
+                    {server.status === 'suspended' ? '🚫 Suspendido' : server.status === 'active' ? '🟢 Activo' : '⏸️ ' + server.status}
                   </span>
                 </div>
 
@@ -1411,6 +1464,51 @@ export default function SuperAdminDashboard() {
                         </span>
                       ))
                     )}
+                  </div>
+                </div>
+
+                {/* Server Administration Controls: Suspender / Reactivar & Eliminar (Exclusivo Super Admin) */}
+                <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Control Exclusivo Super Admin</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {/* Toggle Suspender / Reactivar */}
+                    <button
+                      type="button"
+                      onClick={() => handleToggleSuspendServer(server)}
+                      className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                        server.status === 'suspended'
+                          ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                      }`}
+                      title={server.status === 'suspended' ? 'Reactivar este servidor' : 'Suspender temporalmente este servidor'}
+                    >
+                      {server.status === 'suspended' ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Reactivar Servidor</span>
+                        </>
+                      ) : (
+                        <>
+                          <Ban className="w-3.5 h-3.5" />
+                          <span>Suspender Servidor</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Eliminar Servidor */}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteServer(server)}
+                      className="px-3 py-1.5 rounded-xl font-bold text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1.5 transition-all cursor-pointer"
+                      title="Eliminar permanentemente este servidor"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Eliminar</span>
+                    </button>
                   </div>
                 </div>
 

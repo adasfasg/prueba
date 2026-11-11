@@ -87,6 +87,10 @@ function createCampaign(req, res) {
     return res.status(404).json({ error: 'Servidor no encontrado.' });
   }
 
+  if (server.status === 'suspended') {
+    return res.status(400).json({ error: 'No se pueden crear campañas en un servidor suspendido.' });
+  }
+
   if (role === 'pm' && server.pm_user_id !== userId) {
     return res.status(403).json({ error: 'No tienes permiso para crear campañas en este servidor.' });
   }

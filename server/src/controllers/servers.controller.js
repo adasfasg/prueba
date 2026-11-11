@@ -137,6 +137,13 @@ function updateServer(req, res) {
     return res.status(404).json({ error: 'Servidor no encontrado.' });
   }
 
+  // EXCLUSIVIDAD SUPER ADMIN: Solo el Super Admin puede suspender o cambiar estado
+  if (status !== undefined && status !== existing.status) {
+    if (req.user.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Solo el Super Administrador tiene autorización para suspender o cambiar el estado de un servidor.' });
+    }
+  }
+
   const targetOwnerId = owner_user_id !== undefined ? (owner_user_id ? parseInt(owner_user_id, 10) : null) : existing.owner_user_id;
   const targetPmId = pm_user_id !== undefined ? (pm_user_id ? parseInt(pm_user_id, 10) : null) : existing.pm_user_id;
 
@@ -166,6 +173,38 @@ function updateServer(req, res) {
     serverId
   );
 
+  // Si se suspende el servidor, pausar campañas activas y alertar al PM
+  if (status === 'suspended' && existing.status !== 'suspended') {
+    db.prepare("UPDATE campaigns SET status = 'paused' WHERE server_id = ? AND status = 'active'").run(serverId);
+    if (existing.pm_user_id) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, title, message, type, link_url)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        existing.pm_user_id,
+        'Servidor Suspendido',
+        `El servidor "${existing.name}" ha sido suspendido por la Dirección General.`,
+        'warning',
+        '/dashboard/pm?tab=servers'
+      );
+    }
+    logAudit(req.user.id, 'SERVER_SUSPENDED', 'servers', serverId, { name: existing.name }, req);
+  } else if (status === 'active' && existing.status === 'suspended') {
+    if (existing.pm_user_id) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, title, message, type, link_url)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        existing.pm_user_id,
+        'Servidor Reactivado',
+        `El servidor "${existing.name}" ha sido reactivado por la Dirección General.`,
+        'success',
+        '/dashboard/pm?tab=servers'
+      );
+    }
+    logAudit(req.user.id, 'SERVER_REACTIVATED', 'servers', serverId, { name: existing.name }, req);
+  }
+
   // Notify new PM if assignment changed
   if (pm_user_id && pm_user_id !== existing.pm_user_id) {
     db.prepare(`
@@ -185,7 +224,66 @@ function updateServer(req, res) {
   return res.json({ message: 'Servidor actualizado correctamente.' });
 }
 
+function toggleServerStatus(req, res) {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Solo el Super Administrador tiene autorización para suspender o reactivar servidores.' });
+  }
+
+  const serverId = parseInt(req.params.id, 10);
+  const { status } = req.body;
+
+  const existing = db.prepare('SELECT * FROM servers WHERE id = ? AND deleted_at IS NULL').get(serverId);
+  if (!existing) {
+    return res.status(404).json({ error: 'Servidor no encontrado.' });
+  }
+
+  const targetStatus = status || (existing.status === 'suspended' ? 'active' : 'suspended');
+
+  db.prepare('UPDATE servers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(targetStatus, serverId);
+
+  if (targetStatus === 'suspended') {
+    db.prepare("UPDATE campaigns SET status = 'paused' WHERE server_id = ? AND status = 'active'").run(serverId);
+    if (existing.pm_user_id) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, title, message, type, link_url)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        existing.pm_user_id,
+        'Servidor Suspendido',
+        `El servidor "${existing.name}" ha sido suspendido por la Dirección General.`,
+        'warning',
+        '/dashboard/pm?tab=servers'
+      );
+    }
+    logAudit(req.user.id, 'SERVER_SUSPENDED', 'servers', serverId, { name: existing.name, previous_status: existing.status }, req);
+  } else if (targetStatus === 'active') {
+    if (existing.pm_user_id) {
+      db.prepare(`
+        INSERT INTO notifications (user_id, title, message, type, link_url)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        existing.pm_user_id,
+        'Servidor Reactivado',
+        `El servidor "${existing.name}" ha sido reactivado por la Dirección General.`,
+        'success',
+        '/dashboard/pm?tab=servers'
+      );
+    }
+    logAudit(req.user.id, 'SERVER_REACTIVATED', 'servers', serverId, { name: existing.name }, req);
+  }
+
+  return res.json({ 
+    message: targetStatus === 'suspended' ? 'Servidor suspendido exitosamente.' : 'Servidor reactivado exitosamente.',
+    id: serverId,
+    status: targetStatus
+  });
+}
+
 function deleteServer(req, res) {
+  if (req.user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Solo el Super Administrador tiene autorización para eliminar servidores.' });
+  }
+
   const serverId = parseInt(req.params.id, 10);
 
   const existing = db.prepare('SELECT * FROM servers WHERE id = ? AND deleted_at IS NULL').get(serverId);
@@ -194,11 +292,31 @@ function deleteServer(req, res) {
   }
 
   // Soft delete
-  db.prepare('UPDATE servers SET deleted_at = CURRENT_TIMESTAMP, status = "suspended" WHERE id = ?').run(serverId);
+  db.prepare("UPDATE servers SET deleted_at = CURRENT_TIMESTAMP, status = 'suspended' WHERE id = ?").run(serverId);
 
-  logAudit(req.user.id, 'SERVER_SOFT_DELETED', 'servers', serverId, { name: existing.name }, req);
+  // Inactivar creadores asignados
+  db.prepare("UPDATE server_creators SET status = 'inactive' WHERE server_id = ?").run(serverId);
 
-  return res.json({ message: 'Servidor dado de baja correctamente.' });
+  // Pausar campañas
+  db.prepare("UPDATE campaigns SET status = 'paused' WHERE server_id = ? AND status = 'active'").run(serverId);
+
+  // Notificar al PM asignado
+  if (existing.pm_user_id) {
+    db.prepare(`
+      INSERT INTO notifications (user_id, title, message, type, link_url)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      existing.pm_user_id,
+      'Servidor Dado de Baja',
+      `El servidor "${existing.name}" ha sido eliminado por la Dirección General.`,
+      'warning',
+      '/dashboard/pm?tab=servers'
+    );
+  }
+
+  logAudit(req.user.id, 'SERVER_DELETED', 'servers', serverId, { name: existing.name }, req);
+
+  return res.json({ message: 'Servidor eliminado correctamente.' });
 }
 
 function assignCreatorToServer(req, res) {
@@ -250,6 +368,7 @@ module.exports = {
   getServers,
   createServer,
   updateServer,
+  toggleServerStatus,
   deleteServer,
   assignCreatorToServer,
   removeCreatorFromServer
