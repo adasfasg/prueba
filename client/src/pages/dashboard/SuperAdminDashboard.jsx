@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
+import GroupedCampaignsView from '../../components/GroupedCampaignsView';
+import ServerFinancialsAndContracts from '../../components/ServerFinancialsAndContracts';
+import ExpenseCutoffReport from '../../components/ExpenseCutoffReport';
+import PmPayoutsManagement from '../../components/PmPayoutsManagement';
+import MultiSelectDropdown from '../../components/MultiSelectDropdown';
 import { useAuth } from '../../context/AuthContext';
 import { 
   ImageIcon, Receipt, Users, Server, Target, Shield, AlertTriangle, CheckCircle2, 
@@ -27,6 +32,7 @@ export default function SuperAdminDashboard() {
   const [selectedEvidenceForPay, setSelectedEvidenceForPay] = useState(null);
   const [payoutForm, setPayoutForm] = useState({ payout_amount: '', payment_reference: '', payment_notes: '' });
   const [paySubmitting, setPaySubmitting] = useState(false);
+  const [isEditingPayment, setIsEditingPayment] = useState(false);
   const [receiptModalOpen, setReceiptModalOpen] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [imageModalUrl, setImageModalUrl] = useState(null);
@@ -81,10 +87,10 @@ export default function SuperAdminDashboard() {
     alias: '', hourly_rate_internal: 0, fixed_rate_internal: 0
   });
   const [newServer, setNewServer] = useState({
-    name: '', game: 'Metin2', contact_info: '', pm_user_id: '', owner_user_id: '', website_url: '', notes: '', creator_ids: []
+    name: '', game: 'Metin2', contact_info: '', pm_user_id: '', pm_ids: [], budget: '', owner_user_id: '', website_url: '', notes: '', creator_ids: []
   });
   const [newCampaign, setNewCampaign] = useState({
-    name: '', server_id: '', objective: '', requirements: '', budget_internal: 0, status: 'active', creator_ids: []
+    name: '', server_id: '', objective: '', requirements: '', budget_internal: 0, target_evidences: 0, target_hours: 0, pm_fee: 0, status: 'active', creator_ids: [], pm_ids: []
   });
 
   const fetchData = async () => {
@@ -162,10 +168,37 @@ export default function SuperAdminDashboard() {
   // Handle Assign PM to Server
   const handleAssignPm = async (serverId, pmId) => {
     try {
+      await fetch(`/api/servers/${serverId}/pms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pm_id: parseInt(pmId, 10) })
+      });
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Handle Remove PM from Server
+  const handleRemovePm = async (serverId, pmId) => {
+    try {
+      await fetch(`/api/servers/${serverId}/pms/${pmId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Handle Update Server Budget
+  const handleUpdateServerBudget = async (serverId, budgetVal) => {
+    try {
       await fetch(`/api/servers/${serverId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ pm_user_id: pmId ? parseInt(pmId, 10) : null })
+        body: JSON.stringify({ budget: parseFloat(budgetVal) || 0 })
       });
       fetchData();
     } catch (err) {
@@ -245,7 +278,7 @@ export default function SuperAdminDashboard() {
       });
       if (res.ok) {
         setServerModalOpen(false);
-        setNewServer({ name: '', game: 'Metin2', contact_info: '', pm_user_id: '', owner_user_id: '', website_url: '', notes: '', creator_ids: [] });
+        setNewServer({ name: '', game: 'Metin2', contact_info: '', pm_user_id: '', pm_ids: [], budget: '', owner_user_id: '', website_url: '', notes: '', creator_ids: [] });
         fetchData();
       } else {
         const err = await res.json();
@@ -316,7 +349,49 @@ export default function SuperAdminDashboard() {
       });
       if (res.ok) {
         setCampaignModalOpen(false);
-        setNewCampaign({ name: '', server_id: '', objective: '', requirements: '', budget_internal: 0, status: 'active', creator_ids: [] });
+        setNewCampaign({ name: '', server_id: '', objective: '', requirements: '', budget_internal: 0, target_evidences: 0, target_hours: 0, pm_fee: 0, status: 'active', creator_ids: [], pm_ids: [] });
+        fetchData();
+      } else {
+        const err = await res.json();
+        alert(err.error);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Open Create Campaign modal (optionally pre-selecting a server)
+  const handleOpenCreateCampaignWithServer = (serverId = null) => {
+    const sId = serverId ? String(serverId) : (servers[0]?.id ? String(servers[0].id) : '');
+    const srv = servers.find(s => String(s.id) === sId);
+    const initialPmIds = (srv?.assigned_pms || []).map(p => p.pm_id);
+    if (initialPmIds.length === 0 && srv?.pm_user_id) initialPmIds.push(srv.pm_user_id);
+
+    setNewCampaign({
+      name: '',
+      server_id: sId,
+      objective: '',
+      requirements: '',
+      budget_internal: 0,
+      target_evidences: 0,
+      target_hours: 0,
+      pm_fee: 0,
+      status: 'active',
+      creator_ids: [],
+      pm_ids: initialPmIds
+    });
+    setCampaignModalOpen(true);
+  };
+
+  // Toggle Campaign Status (Active / Paused / Completed)
+  const handleToggleCampaignStatus = async (camp, newStatus) => {
+    try {
+      const res = await fetch(`/api/campaigns/${camp.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
         fetchData();
       } else {
         const err = await res.json();
@@ -329,14 +404,28 @@ export default function SuperAdminDashboard() {
 
   // Handle Open Edit Campaign
   const handleOpenEditCampaign = (camp) => {
+    const campPmIds = Array.isArray(camp.pm_ids) && camp.pm_ids.length > 0 
+      ? camp.pm_ids 
+      : (camp.assigned_pms && camp.assigned_pms.length > 0 
+          ? camp.assigned_pms.map(p => p.pm_id) 
+          : (camp.pm_user_id ? [camp.pm_user_id] : []));
+
     setEditingCampaign({
       id: camp.id,
+      server_id: camp.server_id,
+      server_name: camp.server_name,
+      server_budget: camp.server_budget,
       name: camp.name,
       status: camp.status,
       objective: camp.objective || '',
       requirements: camp.requirements || '',
       budget_internal: camp.budget_internal || 0,
-      notes: camp.notes || ''
+      target_evidences: camp.target_evidences || 0,
+      target_hours: camp.target_hours || 0,
+      pm_fee: camp.pm_fee || 0,
+      creators_count: (camp.creators || []).length,
+      notes: camp.notes || '',
+      pm_ids: campPmIds
     });
     setEditCampaignModalOpen(true);
   };
@@ -425,6 +514,7 @@ export default function SuperAdminDashboard() {
     // Handle Evidence Payment by Admin
   const handleOpenPayModal = (ev) => {
     setSelectedEvidenceForPay(ev);
+    setIsEditingPayment(false);
     setPayoutForm({
       payout_amount: ev.suggested_payout !== undefined ? ev.suggested_payout : 0,
       payment_reference: `TRX-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -433,13 +523,65 @@ export default function SuperAdminDashboard() {
     setPayModalOpen(true);
   };
 
+  const handleOpenEditPayModal = (ev) => {
+    setSelectedEvidenceForPay(ev);
+    setIsEditingPayment(true);
+    setPayoutForm({
+      payout_amount: ev.payout_amount !== undefined ? ev.payout_amount : 0,
+      payment_reference: ev.payment_reference || '',
+      payment_notes: ev.payment_notes || ''
+    });
+    setPayModalOpen(true);
+  };
+
+  const handleRevertEvidencePayment = async (ev) => {
+    if (!window.confirm(`¿Seguro que deseas anular y eliminar el pago de $${ev.payout_amount} USD de esta entrega?\n\nLa entrega volverá al estado "Aprobado", se descontará de los gastos del servidor y se recalcularán los informes contables.`)) return;
+    try {
+      const res = await fetch(`/api/evidences/${ev.id}/pay`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        fetchData();
+        if (activeTab === 'reports') fetchReports();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Error al revertir pago.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error de conexión al revertir pago.');
+    }
+  };
+
+  const handleDeleteEvidence = async (ev) => {
+    if (!window.confirm(`¿Seguro que deseas eliminar definitivamente esta entrega de ${ev.creator_alias || ev.creator_full_name}?\n\nSi tenía un pago asociado, se eliminará automáticamente y los balances del servidor se recalcularán.`)) return;
+    try {
+      const res = await fetch(`/api/evidences/${ev.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        fetchData();
+        if (activeTab === 'reports') fetchReports();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Error al eliminar entrega.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error de conexión al eliminar entrega.');
+    }
+  };
+
   const handleProcessPayout = async (e) => {
     e.preventDefault();
     if (!selectedEvidenceForPay) return;
     setPaySubmitting(true);
     try {
+      const method = isEditingPayment ? 'PUT' : 'POST';
       const res = await fetch(`/api/evidences/${selectedEvidenceForPay.id}/pay`, {
-        method: 'POST',
+        method,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
@@ -449,6 +591,7 @@ export default function SuperAdminDashboard() {
       if (res.ok) {
         setPayModalOpen(false);
         setSelectedEvidenceForPay(null);
+        setIsEditingPayment(false);
         fetchData();
         if (activeTab === 'reports') fetchReports();
       } else {
@@ -922,6 +1065,18 @@ export default function SuperAdminDashboard() {
               <h3 className="text-base font-bold text-white">Informes & Analytics</h3>
               <p className="text-xs text-slate-400 mt-1">Ranking de top streamers por vistas, salud de ecosistemas, impacto y finanzas.</p>
             </div>
+
+            <div 
+              onClick={() => setActiveTab('cutoffs')}
+              className="p-6 bg-slate-900 border border-amber-500/30 hover:border-amber-500/60 rounded-2xl cursor-pointer transition-all hover:scale-[1.01] bg-gradient-to-br from-slate-900 to-amber-950/20"
+            >
+              <Receipt className="w-8 h-8 text-amber-400 mb-3" />
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-white">Cortes & Liquidación de Gastos</h3>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-500 text-slate-950 uppercase">Cortes</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">Informe financiero por cortes o fechas con gastos por streamer, servidor y pagos de PMs.</p>
+            </div>
           </div>
 
         </div>
@@ -1225,14 +1380,39 @@ export default function SuperAdminDashboard() {
                           )}
 
                           {isPaid && (
-                            <button
-                              onClick={() => { setSelectedReceipt(ev); setReceiptModalOpen(true); }}
-                              className="px-3.5 py-1.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5"
-                            >
-                              <Receipt className="w-3.5 h-3.5" />
-                              <span>Ver Comprobante</span>
-                            </button>
+                            <>
+                              <button
+                                onClick={() => { setSelectedReceipt(ev); setReceiptModalOpen(true); }}
+                                className="px-3.5 py-1.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                                <span>Ver Comprobante</span>
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditPayModal(ev)}
+                                className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                                title="Editar Pago de Entrega"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                                <span>Editar Pago</span>
+                              </button>
+                              <button
+                                onClick={() => handleRevertEvidencePayment(ev)}
+                                className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                                title="Anular Pago (Revertir entrega a Aprobada)"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Anular Pago</span>
+                              </button>
+                            </>
                           )}
+                          <button
+                            onClick={() => handleDeleteEvidence(ev)}
+                            className="p-1.5 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
+                            title="Eliminar Entrega definitivamente"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
 
@@ -1390,30 +1570,73 @@ export default function SuperAdminDashboard() {
                   </span>
                 </div>
 
-                {/* Assignment Selectors */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">
-                      Promoter Manager Asignado:
-                    </label>
-                    <select
-                      value={server.pm_user_id || ''}
-                      onChange={(e) => handleAssignPm(server.id, e.target.value)}
-                      className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white focus:border-amber-500"
-                    >
-                      <option value="">-- Sin PM Asignado --</option>
-                      {pmsList.map(pm => (
-                        <option key={pm.id} value={pm.id}>{pm.full_name}</option>
-                      ))}
-                    </select>
+                {/* Assignment Selectors & Budget */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                  <div className="sm:col-span-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[10px] font-bold uppercase text-slate-400">
+                        Promoter Managers Asignados:
+                      </label>
+                      <select
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            handleAssignPm(server.id, e.target.value);
+                            e.target.value = '';
+                          }
+                        }}
+                        className="px-2 py-0.5 bg-slate-950 border border-slate-800 rounded text-[10px] text-amber-400 focus:border-amber-500 cursor-pointer"
+                      >
+                        <option value="">+ Asignar Otro PM</option>
+                        {pmsList.filter(pm => !(server.assigned_pms || []).some(ap => ap.pm_id === pm.id)).map(pm => (
+                          <option key={pm.id} value={pm.id}>{pm.full_name} (@{pm.username || pm.email})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 min-h-[30px] p-1.5 bg-slate-950 border border-slate-800 rounded-lg">
+                      {(!server.assigned_pms || server.assigned_pms.length === 0) && !server.pm_name ? (
+                        <span className="text-slate-500 text-[11px] italic px-1">Sin PMs asignados</span>
+                      ) : (
+                        (server.assigned_pms && server.assigned_pms.length > 0 
+                          ? server.assigned_pms 
+                          : [{ pm_id: server.pm_user_id, pm_name: server.pm_name, pm_username: server.pm_username }]
+                        ).map(pmObj => (
+                          <span 
+                            key={pmObj.pm_id}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 rounded-md text-[11px] text-amber-300 font-medium"
+                          >
+                            <Shield className="w-3 h-3 text-amber-400" />
+                            <span>{pmObj.pm_name}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePm(server.id, pmObj.pm_id)}
+                              className="text-slate-500 hover:text-red-400 transition-colors ml-0.5"
+                              title="Desvincular este PM"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))
+                      )}
+                    </div>
                   </div>
 
                   <div>
                     <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">
-                      Dueño Registrado:
+                      Presupuesto Servidor:
                     </label>
-                    <div className="px-3 py-1.5 bg-slate-950 border border-slate-800/80 rounded-lg text-xs text-slate-300 truncate">
-                      {server.owner_name || 'Sin dueño vinculado'}
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      defaultValue={server.budget || 0}
+                      onBlur={(e) => handleUpdateServerBudget(server.id, e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white font-mono focus:border-amber-500"
+                      placeholder="0.00 USD"
+                    />
+                    <div className="text-[10px] text-slate-500 mt-1 truncate">
+                      Dueño: {server.owner_name || 'Sin dueño'}
                     </div>
                   </div>
                 </div>
@@ -1521,114 +1744,21 @@ export default function SuperAdminDashboard() {
 
       {/* Campaigns Tab */}
       {activeTab === 'campaigns' && (
-        <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-bold text-white font-heading">Campañas Globales de la Agencia</h3>
-              <p className="text-xs text-slate-400">Control integral del Administrador: crear, editar, accionar creadores o cancelar campañas.</p>
-            </div>
-            <button
-              onClick={() => setCampaignModalOpen(true)}
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-xl shadow-md flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Crear Campaña</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {campaigns.map(camp => (
-              <div key={camp.id} className="p-6 bg-slate-900 border border-slate-800 rounded-2xl space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-amber-400">{camp.server_name} ({camp.server_game})</span>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                      camp.status === 'active' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400'
-                    }`}>
-                      {camp.status}
-                    </span>
-                    <button
-                      onClick={() => handleOpenEditCampaign(camp)}
-                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors"
-                      title="Editar Campaña"
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteCampaign(camp.id)}
-                      className="p-1 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded transition-colors"
-                      title="Eliminar Campaña"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="text-base font-bold text-white">{camp.name}</h4>
-                  <p className="text-xs text-slate-400 mt-1 line-clamp-2">{camp.objective || 'Sin objetivo especificado'}</p>
-                  {camp.requirements && (
-                    <div className="mt-2 text-[11px] text-slate-400 bg-slate-950/60 p-2 rounded-lg border border-slate-800">
-                      <span className="font-semibold text-amber-400">Requisitos: </span>
-                      {camp.requirements}
-                    </div>
-                  )}
-                </div>
-
-                <div className="text-[11px] text-slate-400 pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                  <span>PM: <strong className="text-slate-300">{camp.pm_name || 'No asignado'}</strong></span>
-                  <span>Presupuesto: <strong className="text-emerald-400">\${camp.budget_internal}</strong></span>
-                </div>
-
-                {/* Streamers in Campaign & Actioning */}
-                <div className="pt-2 border-t border-slate-800/80">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Streamers en Campaña ({camp.creators?.length || 0}):
-                    </span>
-                    <select
-                      defaultValue=""
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          handleAssignCreatorToCampaign(camp.id, e.target.value);
-                          e.target.value = '';
-                        }
-                      }}
-                      className="px-2 py-0.5 bg-slate-950 border border-slate-800 rounded text-[11px] text-amber-400 focus:outline-none"
-                    >
-                      <option value="">+ Accionar Streamer</option>
-                      {creatorsList
-                        .filter(cr => !camp.creators?.some(c => c.user_id === cr.user_id))
-                        .map(cr => (
-                          <option key={cr.user_id} value={cr.user_id}>{cr.alias}</option>
-                        ))}
-                    </select>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {camp.creators?.length === 0 ? (
-                      <span className="text-[11px] text-slate-500 italic">No hay creadores accionados.</span>
-                    ) : (
-                      camp.creators?.map(cr => (
-                        <span key={cr.user_id} className="px-2 py-0.5 bg-slate-950 border border-slate-800 rounded text-[11px] text-slate-300 flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          <span>{cr.alias}</span>
-                          <button
-                            onClick={() => handleRemoveCreatorFromCampaign(camp.id, cr.user_id)}
-                            className="text-slate-500 hover:text-red-400 text-xs ml-0.5"
-                            title="Desvincular de campaña"
-                          >
-                            ✕
-                          </button>
-                        </span>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-              </div>
-            ))}
-          </div>
-        </div>
+        <GroupedCampaignsView
+          servers={servers}
+          campaigns={campaigns}
+          userRole="super_admin"
+          canCreate={true}
+          canEdit={true}
+          canDelete={true}
+          creatorsList={creatorsList}
+          onOpenCreateCampaign={handleOpenCreateCampaignWithServer}
+          onOpenEditCampaign={handleOpenEditCampaign}
+          onDeleteCampaign={handleDeleteCampaign}
+          onToggleStatusCampaign={handleToggleCampaignStatus}
+          onAssignCreator={handleAssignCreatorToCampaign}
+          onRemoveCreator={handleRemoveCreatorFromCampaign}
+        />
       )}
 
       {/* Audit Logs Tab */}
@@ -1870,6 +2000,22 @@ export default function SuperAdminDashboard() {
 
             <button
               type="button"
+              onClick={() => setReportsSubTab('expense_cutoffs')}
+              className={`px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer ${
+                reportsSubTab === 'expense_cutoffs'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-md font-extrabold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <Receipt className="w-4 h-4" />
+              <span>Informe de Cortes & Gastos</span>
+              <span className="px-1.5 py-0.2 text-[9px] font-black uppercase rounded bg-slate-950/40 text-slate-950">
+                Cortes
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setReportsSubTab('financials')}
               className={`px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer ${
                 reportsSubTab === 'financials'
@@ -1881,6 +2027,26 @@ export default function SuperAdminDashboard() {
               <span>Campañas & Presupuesto</span>
             </button>
           </div>
+
+          {/* Subtab: Expense Cutoff Report (Informe de Gastos por Cortes o Fechas) */}
+          {reportsSubTab === 'expense_cutoffs' && (
+            <ExpenseCutoffReport
+              token={token}
+              servers={servers}
+              userRole="super_admin"
+            />
+          )}
+
+          {/* Subtab: Server P&L y Presupuestos */}
+          {reportsSubTab === 'server_pnl' && (
+            <ServerFinancialsAndContracts
+              servers={servers}
+              creators={safeCreatorsList}
+              pms={pmsList}
+              token={token}
+              userRole="super_admin"
+            />
+          )}
 
           {/* Subtab 1: Top Streamers by Views */}
           {reportsSubTab === 'streamers' && reportsData && (
@@ -2378,6 +2544,20 @@ export default function SuperAdminDashboard() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Cortes & Gastos Tab (Informe Consolidado por Cortes o Fechas) */}
+      {activeTab === 'cutoffs' && (
+        <ExpenseCutoffReport
+          token={token}
+          servers={servers}
+          userRole="super_admin"
+        />
+      )}
+
+      {/* Pagos a PMs Tab (Gestión de Honorarios, Servidores y Campañas de PMs) */}
+      {activeTab === 'pm_payouts' && (
+        <PmPayoutsManagement token={token} />
       )}
 
       {/* PMs & Streamers (Talent Management) Tab */}
@@ -3380,126 +3560,143 @@ export default function SuperAdminDashboard() {
       {/* Modal: Create Server */}
       {serverModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <h4 className="text-lg font-bold text-white font-heading">Registrar Nuevo Servidor</h4>
-            <form onSubmit={handleCreateServerSubmit} className="space-y-3 text-xs">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="p-5 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
               <div>
-                <label className="block text-slate-300 font-bold mb-1">Nombre del Servidor</label>
-                <input
-                  type="text"
-                  required
-                  value={newServer.name}
-                  onChange={e => setNewServer({ ...newServer, name: e.target.value })}
-                  placeholder="Ej. Origin Metin2"
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
+                <h4 className="text-lg font-bold text-white font-heading">Registrar Nuevo Servidor</h4>
+                <p className="text-xs text-slate-400">Configura la información básica, presupuesto y asignaciones operativas.</p>
               </div>
+              <button
+                type="button"
+                onClick={() => setServerModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Juego</label>
-                  <input
-                    type="text"
-                    value={newServer.game}
-                    onChange={e => setNewServer({ ...newServer, game: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
+            <form onSubmit={handleCreateServerSubmit} className="flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 overflow-y-auto space-y-4 text-xs flex-1 custom-scrollbar pb-16">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Nombre del Servidor *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newServer.name}
+                      onChange={e => setNewServer({ ...newServer, name: e.target.value })}
+                      placeholder="Ej. Origin Metin2"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Juego *</label>
+                    <input
+                      type="text"
+                      value={newServer.game}
+                      onChange={e => setNewServer({ ...newServer, game: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Website URL</label>
+                    <input
+                      type="url"
+                      value={newServer.website_url}
+                      onChange={e => setNewServer({ ...newServer, website_url: e.target.value })}
+                      placeholder="https://..."
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Información de Contacto / Discord</label>
+                    <input
+                      type="text"
+                      value={newServer.contact_info}
+                      onChange={e => setNewServer({ ...newServer, contact_info: e.target.value })}
+                      placeholder="Discord tag o email"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Presupuesto del Servidor ($ USD)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newServer.budget}
+                      onChange={e => setNewServer({ ...newServer, budget: e.target.value })}
+                      placeholder="0.00 USD"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Dueño de Servidor</label>
+                    <select
+                      value={newServer.owner_user_id}
+                      onChange={e => setNewServer({ ...newServer, owner_user_id: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white"
+                    >
+                      <option value="">-- Sin Dueño Vinculado --</option>
+                      {ownersList.map(o => (
+                        <option key={o.id} value={o.id}>{o.full_name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  <MultiSelectDropdown
+                    label="Asignar Promoter Managers (PMs) al Servidor:"
+                    placeholder="Seleccionar PMs asignados..."
+                    searchPlaceholder="Buscar por nombre, usuario o email..."
+                    items={pmsList.map(pm => ({
+                      id: pm.id,
+                      label: pm.full_name,
+                      sublabel: `(@${pm.username || pm.email})`
+                    }))}
+                    selectedIds={newServer.pm_ids || []}
+                    onChange={(ids) => setNewServer({ ...newServer, pm_ids: ids, pm_user_id: ids[0] || '' })}
+                    icon={Shield}
+                    accentColor="blue"
+                    helperText="Puedes asignar 1 o más PMs para supervisar el servidor."
+                  />
+
+                  <MultiSelectDropdown
+                    label="Asignar Streamers / Creadores al Servidor (Opcional):"
+                    placeholder="Seleccionar streamers vinculados..."
+                    searchPlaceholder="Buscar streamer por alias o nombre..."
+                    items={safeCreatorsList.filter(Boolean).map(cr => ({
+                      id: cr.user_id,
+                      label: cr.alias || cr.full_name,
+                      sublabel: `(${cr.full_name} • ${Array.isArray(cr.games) ? cr.games.join(', ') : (cr.games || 'Metin2')})`
+                    }))}
+                    selectedIds={newServer.creator_ids || []}
+                    onChange={(ids) => setNewServer({ ...newServer, creator_ids: ids })}
+                    icon={Users}
+                    accentColor="amber"
+                    helperText="Los streamers seleccionados quedarán habilitados para las campañas de este servidor."
                   />
                 </div>
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Website URL</label>
-                  <input
-                    type="url"
-                    value={newServer.website_url}
-                    onChange={e => setNewServer({ ...newServer, website_url: e.target.value })}
-                    placeholder="https://..."
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                  />
-                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Asignar PM Inicial</label>
-                  <select
-                    value={newServer.pm_user_id}
-                    onChange={e => setNewServer({ ...newServer, pm_user_id: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                  >
-                    <option value="">-- Sin PM --</option>
-                    {pmsList.map(pm => (
-                      <option key={pm.id} value={pm.id}>{pm.full_name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Dueño de Servidor</label>
-                  <select
-                    value={newServer.owner_user_id}
-                    onChange={e => setNewServer({ ...newServer, owner_user_id: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                  >
-                    <option value="">-- Sin Dueño Vinculado --</option>
-                    {ownersList.map(o => (
-                      <option key={o.id} value={o.id}>{o.full_name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Assign Streamers upon server creation */}
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">
-                  Asignar Streamers / Creadores al Servidor (Opcional):
-                </label>
-                <div className="max-h-36 overflow-y-auto p-2.5 bg-slate-950 border border-slate-800 rounded-lg space-y-2">
-                  {safeCreatorsList.length === 0 ? (
-                    <div className="text-slate-500 text-xs">No hay creadores registrados en la plataforma.</div>
-                  ) : (
-                    safeCreatorsList.map(cr => cr && (
-                      <label key={cr.user_id} className="flex items-center gap-2 text-xs text-slate-300 hover:text-white cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={(newServer.creator_ids || []).includes(cr.user_id)}
-                          onChange={(e) => {
-                            const current = newServer.creator_ids || [];
-                            if (e.target.checked) {
-                              setNewServer({ ...newServer, creator_ids: [...current, cr.user_id] });
-                            } else {
-                              setNewServer({ ...newServer, creator_ids: current.filter(id => id !== cr.user_id) });
-                            }
-                          }}
-                          className="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
-                        />
-                        <span className="font-semibold text-amber-400">{cr.alias || cr.full_name}</span>
-                        <span className="text-slate-500 text-[11px]">({cr.full_name} • {Array.isArray(cr.games) ? cr.games.join(', ') : (cr.games || 'Metin2')})</span>
-                      </label>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Información de Contacto / Discord</label>
-                <input
-                  type="text"
-                  value={newServer.contact_info}
-                  onChange={e => setNewServer({ ...newServer, contact_info: e.target.value })}
-                  placeholder="Discord tag o email"
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-4">
+              <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-end gap-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => setServerModalOpen(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 rounded-lg"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-lg"
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl shadow-lg transition-colors cursor-pointer"
                 >
                   Crear Servidor y Guardar Asignaciones
                 </button>
@@ -3512,112 +3709,229 @@ export default function SuperAdminDashboard() {
       {/* Modal: Create Campaign (Admin) */}
       {campaignModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <h4 className="text-lg font-bold text-white font-heading">Crear Nueva Campaña</h4>
-            <form onSubmit={handleCreateCampaignSubmit} className="space-y-3 text-xs">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="p-5 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
               <div>
-                <label className="block text-slate-300 font-bold mb-1">Nombre de la Campaña *</label>
-                <input
-                  type="text"
-                  required
-                  value={newCampaign.name}
-                  onChange={e => setNewCampaign({ ...newCampaign, name: e.target.value })}
-                  placeholder="Ej. Apertura Servidor Nuevo 2026"
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
+                <h4 className="text-lg font-bold text-white font-heading">Crear Nueva Campaña</h4>
+                <p className="text-xs text-slate-400 mt-0.5">Define parámetros, objetivos, asignación de PMs y streamers de la campaña</p>
               </div>
+              <button
+                type="button"
+                onClick={() => setCampaignModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleCreateCampaignSubmit} className="flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 overflow-y-auto space-y-4 text-xs flex-1 custom-scrollbar pb-16">
                 <div>
-                  <label className="block text-slate-300 font-bold mb-1">Servidor *</label>
-                  <select
-                    required
-                    value={newCampaign.server_id}
-                    onChange={e => setNewCampaign({ ...newCampaign, server_id: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                  >
-                    <option value="">-- Seleccionar Servidor --</option>
-                    {safeServers.map(s => (
-                      <option key={s.id} value={s.id}>{s.name} ({s.game || 'Metin2'})</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Presupuesto Asignado ($)</label>
+                  <label className="block text-slate-300 font-bold mb-1">Nombre de la Campaña *</label>
                   <input
-                    type="number"
-                    value={newCampaign.budget_internal}
-                    onChange={e => setNewCampaign({ ...newCampaign, budget_internal: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
+                    type="text"
+                    required
+                    value={newCampaign.name}
+                    onChange={e => setNewCampaign({ ...newCampaign, name: e.target.value })}
+                    placeholder="Ej. Apertura Servidor Nuevo 2026"
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Objetivo de la Campaña</label>
-                <textarea
-                  rows="2"
-                  value={newCampaign.objective}
-                  onChange={e => setNewCampaign({ ...newCampaign, objective: e.target.value })}
-                  placeholder="Metas de audiencia o eventos de apertura..."
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
-              </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Servidor *</label>
+                    <select
+                      required
+                      value={newCampaign.server_id}
+                      onChange={e => setNewCampaign({ ...newCampaign, server_id: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    >
+                      <option value="">-- Seleccionar Servidor --</option>
+                      {safeServers.map(s => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.game || 'Metin2'})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Presupuesto Asignado ($)</label>
+                    <input
+                      type="number"
+                      value={newCampaign.budget_internal}
+                      onChange={e => setNewCampaign({ ...newCampaign, budget_internal: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Requisitos para Streamers</label>
-                <textarea
-                  rows="2"
-                  value={newCampaign.requirements}
-                  onChange={e => setNewCampaign({ ...newCampaign, requirements: e.target.value })}
-                  placeholder="Horas de stream mínimas, banners en pantalla, enlaces en chat..."
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
-              </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Honorario / Comisión PM ($)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newCampaign.pm_fee || 0}
+                      onChange={e => setNewCampaign({ ...newCampaign, pm_fee: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                      Se descontará automáticamente del presupuesto final de la campaña al concluirla.
+                    </span>
+                  </div>
+                  <div>
+                    {(() => {
+                      const selServer = safeServers.find(s => s.id === parseInt(newCampaign.server_id, 10));
+                      if (!selServer || !selServer.budget || selServer.budget <= 0) return null;
+                      const serverAllocated = campaigns
+                        .filter(c => c.server_id === selServer.id && !c.deleted_at)
+                        .reduce((acc, c) => acc + (parseFloat(c.budget_internal) || 0), 0);
+                      const serverRemaining = Math.max(0, selServer.budget - serverAllocated);
+                      return (
+                        <div className="p-3 bg-slate-950 border border-amber-500/30 rounded-xl text-[11px] text-amber-300 flex flex-col gap-1 justify-center">
+                          <div className="flex justify-between items-center">
+                            <span>Límite del Servidor:</span>
+                            <strong className="text-white">${parseFloat(selServer.budget).toLocaleString()}</strong>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span>Disponible para Campañas:</span>
+                            <strong className="text-emerald-400">${serverRemaining.toLocaleString()}</strong>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
 
-              {/* Action Streamers in Campaign */}
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">
-                  Accionar Streamers para esta Campaña (Opcional):
-                </label>
-                <div className="max-h-32 overflow-y-auto p-2 bg-slate-950 border border-slate-800 rounded-lg space-y-1.5">
-                  {safeCreatorsList.length === 0 ? (
-                    <div className="text-slate-500 text-xs">No hay streamers registrados.</div>
-                  ) : (
-                    safeCreatorsList.map(cr => cr && (
-                      <label key={cr.user_id} className="flex items-center gap-2 text-xs text-slate-300 hover:text-white cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={(newCampaign.creator_ids || []).includes(cr.user_id)}
-                          onChange={(e) => {
-                            const current = newCampaign.creator_ids || [];
-                            if (e.target.checked) {
-                              setNewCampaign({ ...newCampaign, creator_ids: [...current, cr.user_id] });
-                            } else {
-                              setNewCampaign({ ...newCampaign, creator_ids: current.filter(id => id !== cr.user_id) });
-                            }
-                          }}
-                          className="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Nº Directos Objetivo por Streamer</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={newCampaign.target_evidences || 0}
+                      onChange={e => setNewCampaign({ ...newCampaign, target_evidences: e.target.value })}
+                      placeholder="0 = Sin límite"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500">Meta que debe entregar CADA streamer (0 = sin límite)</span>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Horas Directo Objetivo / Límite</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={newCampaign.target_hours || 0}
+                      onChange={e => setNewCampaign({ ...newCampaign, target_hours: e.target.value })}
+                      placeholder="0 = Sin límite"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500">Tope máx de horas (0 = sin límite)</span>
+                  </div>
+                </div>
+
+                {/* Multiplicador y cálculo de Directos Totales */}
+                {parseInt(newCampaign.target_evidences, 10) > 0 && (
+                  <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-xs text-indigo-300 flex items-center justify-between">
+                    <span>🎯 Total de Directos de la Campaña:</span>
+                    <span className="font-semibold text-white">
+                      {parseInt(newCampaign.target_evidences, 10)} directos/streamer × {Math.max(1, (newCampaign.creator_ids || []).length)} streamer(s) ={' '}
+                      <span className="text-amber-400 font-bold text-sm">
+                        {parseInt(newCampaign.target_evidences, 10) * Math.max(1, (newCampaign.creator_ids || []).length)} directos totales
+                      </span>
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Objetivo de la Campaña</label>
+                    <textarea
+                      rows="2"
+                      value={newCampaign.objective}
+                      onChange={e => setNewCampaign({ ...newCampaign, objective: e.target.value })}
+                      placeholder="Metas de audiencia o eventos de apertura..."
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Requisitos para Streamers</label>
+                    <textarea
+                      rows="2"
+                      value={newCampaign.requirements}
+                      onChange={e => setNewCampaign({ ...newCampaign, requirements: e.target.value })}
+                      placeholder="Horas de stream mínimas, banners en pantalla, enlaces en chat..."
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Dropdowns en 2 columnas */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    {(() => {
+                      const selServer = safeServers.find(s => s.id === parseInt(newCampaign.server_id, 10));
+                      const serverPmIds = new Set((selServer?.assigned_pms || []).map(p => p.pm_id));
+                      if (selServer?.pm_user_id) serverPmIds.add(selServer.pm_user_id);
+
+                      const allPms = (users || []).filter(u => u && u.role === 'pm' && u.status === 'active');
+                      const pmItems = allPms.map(pm => ({
+                        id: pm.id,
+                        label: pm.full_name,
+                        sublabel: `(@${pm.username || pm.email})`,
+                        badge: serverPmIds.has(pm.id) ? 'Del Servidor' : null,
+                        badgeColor: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                      }));
+
+                      return (
+                        <MultiSelectDropdown
+                          label="PM(s) a Cargo de esta Campaña:"
+                          placeholder="Seleccionar PMs de la campaña..."
+                          searchPlaceholder="Buscar PM por nombre o usuario..."
+                          items={pmItems}
+                          selectedIds={newCampaign.pm_ids || []}
+                          onChange={(ids) => setNewCampaign({ ...newCampaign, pm_ids: ids })}
+                          icon={Shield}
+                          accentColor="blue"
+                          helperText="Solo los PMs seleccionados podrán gestionar esta campaña y auditar sus actividades."
                         />
-                        <span className="font-semibold text-amber-400">{cr.alias || cr.full_name}</span>
-                        <span className="text-slate-500 text-[11px]">({cr.full_name})</span>
-                      </label>
-                    ))
-                  )}
+                      );
+                    })()}
+                  </div>
+
+                  <div>
+                    <MultiSelectDropdown
+                      label="Accionar Streamers para esta Campaña (Opcional):"
+                      placeholder="Seleccionar streamers participantes..."
+                      searchPlaceholder="Buscar streamer por alias o nombre..."
+                      items={safeCreatorsList.filter(Boolean).map(cr => ({
+                        id: cr.user_id,
+                        label: cr.alias || cr.full_name,
+                        sublabel: `(${cr.full_name})`
+                      }))}
+                      selectedIds={newCampaign.creator_ids || []}
+                      onChange={(ids) => setNewCampaign({ ...newCampaign, creator_ids: ids })}
+                      icon={Users}
+                      accentColor="amber"
+                      helperText="Los streamers seleccionados podrán ver y registrar directos para esta campaña."
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-4">
+              <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-end gap-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => setCampaignModalOpen(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 rounded-lg"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-lg"
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl shadow-lg transition-colors cursor-pointer"
                 >
                   Crear y Activar Campaña
                 </button>
@@ -3630,76 +3944,203 @@ export default function SuperAdminDashboard() {
       {/* Modal: Edit Campaign (Admin) */}
       {editCampaignModalOpen && editingCampaign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <h4 className="text-lg font-bold text-white font-heading">Editar Campaña (Control Administrador)</h4>
-            <form onSubmit={handleUpdateCampaignSubmit} className="space-y-3 text-xs">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="p-5 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
               <div>
-                <label className="block text-slate-300 font-bold mb-1">Nombre de la Campaña</label>
-                <input
-                  type="text"
-                  required
-                  value={editingCampaign.name}
-                  onChange={e => setEditingCampaign({ ...editingCampaign, name: e.target.value })}
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
+                <h4 className="text-lg font-bold text-white font-heading">Editar Campaña (Control Administrador)</h4>
+                <p className="text-xs text-slate-400 mt-0.5">Modifica parámetros, límites de directos y PMs asignados</p>
               </div>
+              <button
+                type="button"
+                onClick={() => { setEditCampaignModalOpen(false); setEditingCampaign(null); }}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-              <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleUpdateCampaignSubmit} className="flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 overflow-y-auto space-y-4 text-xs flex-1 custom-scrollbar pb-16">
                 <div>
-                  <label className="block text-slate-300 font-bold mb-1">Estado</label>
-                  <select
-                    value={editingCampaign.status}
-                    onChange={e => setEditingCampaign({ ...editingCampaign, status: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                  >
-                    <option value="active">Activa</option>
-                    <option value="paused">Pausada</option>
-                    <option value="completed">Completada</option>
-                    <option value="draft">Borrador (Draft)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1">Presupuesto ($)</label>
+                  <label className="block text-slate-300 font-bold mb-1">Nombre de la Campaña</label>
                   <input
-                    type="number"
-                    value={editingCampaign.budget_internal}
-                    onChange={e => setEditingCampaign({ ...editingCampaign, budget_internal: e.target.value })}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
+                    type="text"
+                    required
+                    value={editingCampaign.name}
+                    onChange={e => setEditingCampaign({ ...editingCampaign, name: e.target.value })}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
                   />
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Estado</label>
+                    <select
+                      value={editingCampaign.status}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, status: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    >
+                      <option value="active">Activa</option>
+                      <option value="paused">Pausada</option>
+                      <option value="completed">Completada</option>
+                      <option value="draft">Borrador (Draft)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Presupuesto ($)</label>
+                    <input
+                      type="number"
+                      value={editingCampaign.budget_internal}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, budget_internal: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Honorario / Comisión PM ($)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editingCampaign.pm_fee || 0}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, pm_fee: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500 block mt-0.5">
+                      Se liquidará automáticamente al marcar la campaña como completada y se descontará de su presupuesto final.
+                    </span>
+                  </div>
+                  <div>
+                    {(() => {
+                      const sBudget = parseFloat(editingCampaign.server_budget) || 0;
+                      if (sBudget <= 0) return null;
+                      const otherAllocated = campaigns
+                        .filter(c => c.server_id === editingCampaign.server_id && c.id !== editingCampaign.id && !c.deleted_at)
+                        .reduce((acc, c) => acc + (parseFloat(c.budget_internal) || 0), 0);
+                      const sRemaining = Math.max(0, sBudget - otherAllocated);
+                      return (
+                        <div className="p-3 bg-slate-950 border border-amber-500/30 rounded-xl text-[11px] text-amber-300 flex flex-col gap-1 justify-center">
+                          <div className="flex justify-between items-center">
+                            <span>Límite del Servidor:</span>
+                            <strong className="text-white">${sBudget.toLocaleString()}</strong>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span>Disponible máx para esta Campaña:</span>
+                            <strong className="text-emerald-400">${sRemaining.toLocaleString()}</strong>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Nº Directos Objetivo por Streamer</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={editingCampaign.target_evidences || 0}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, target_evidences: e.target.value })}
+                      placeholder="0 = Sin límite"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500">Meta que debe entregar CADA streamer (0 = sin límite)</span>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Horas Directo Objetivo / Límite</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={editingCampaign.target_hours || 0}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, target_hours: e.target.value })}
+                      placeholder="0 = Sin límite"
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-500">Tope máx de horas (0 = sin límite)</span>
+                  </div>
+                </div>
+
+                {/* Multiplicador y cálculo de Directos Totales */}
+                {parseInt(editingCampaign.target_evidences, 10) > 0 && (
+                  <div className="p-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-xs text-indigo-300 flex items-center justify-between">
+                    <span>🎯 Total de Directos de la Campaña:</span>
+                    <span className="font-semibold text-white">
+                      {parseInt(editingCampaign.target_evidences, 10)} directos/streamer × {Math.max(1, editingCampaign.creators_count || 1)} streamer(s) ={' '}
+                      <span className="text-amber-400 font-bold text-sm">
+                        {parseInt(editingCampaign.target_evidences, 10) * Math.max(1, editingCampaign.creators_count || 1)} directos totales
+                      </span>
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Objetivo</label>
+                    <textarea
+                      rows="2"
+                      value={editingCampaign.objective}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, objective: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">Requisitos</label>
+                    <textarea
+                      rows="2"
+                      value={editingCampaign.requirements}
+                      onChange={e => setEditingCampaign({ ...editingCampaign, requirements: e.target.value })}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* PM(s) a Cargo de la Campaña via Dropdown */}
+                {(() => {
+                  const selServer = safeServers.find(s => s.id === parseInt(editingCampaign.server_id, 10));
+                  const serverPmIds = new Set((selServer?.assigned_pms || []).map(p => p.pm_id));
+                  if (selServer?.pm_user_id) serverPmIds.add(selServer.pm_user_id);
+
+                  const allPms = (users || []).filter(u => u && u.role === 'pm' && u.status === 'active');
+                  const pmItems = allPms.map(pm => ({
+                    id: pm.id,
+                    label: pm.full_name,
+                    sublabel: `(@${pm.username || pm.email})`,
+                    badge: serverPmIds.has(pm.id) ? 'Del Servidor' : null,
+                    badgeColor: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  }));
+
+                  return (
+                    <MultiSelectDropdown
+                      label="PM(s) a Cargo de esta Campaña:"
+                      placeholder="Seleccionar PMs de la campaña..."
+                      searchPlaceholder="Buscar PM por nombre o usuario..."
+                      items={pmItems}
+                      selectedIds={editingCampaign.pm_ids || []}
+                      onChange={(ids) => setEditingCampaign({ ...editingCampaign, pm_ids: ids })}
+                      icon={Shield}
+                      accentColor="blue"
+                      helperText="Solo los PMs seleccionados podrán gestionar esta campaña y auditar sus actividades."
+                    />
+                  );
+                })()}
               </div>
 
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Objetivo</label>
-                <textarea
-                  rows="2"
-                  value={editingCampaign.objective}
-                  onChange={e => setEditingCampaign({ ...editingCampaign, objective: e.target.value })}
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-bold mb-1">Requisitos</label>
-                <textarea
-                  rows="2"
-                  value={editingCampaign.requirements}
-                  onChange={e => setEditingCampaign({ ...editingCampaign, requirements: e.target.value })}
-                  className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-4">
+              <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-end gap-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => { setEditCampaignModalOpen(false); setEditingCampaign(null); }}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 rounded-lg"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-lg"
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl shadow-lg transition-colors cursor-pointer"
                 >
                   Guardar Cambios
                 </button>
@@ -3726,8 +4167,14 @@ export default function SuperAdminDashboard() {
                   <DollarSign className="w-5 h-5" />
                 </span>
                 <div>
-                  <h3 className="text-lg font-bold text-white font-heading">Revisar y Liquidar Entrega</h3>
-                  <p className="text-xs text-slate-400">Valida los importes y registra el pago oficial al creador.</p>
+                  <h3 className="text-lg font-bold text-white font-heading">
+                    {isEditingPayment ? 'Editar Pago de Entrega' : 'Revisar y Liquidar Entrega'}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {isEditingPayment 
+                      ? 'Modifica el importe liquidado o comprobante para actualizar las finanzas del servidor.'
+                      : 'Valida los importes y registra el pago oficial al creador.'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -3805,13 +4252,17 @@ export default function SuperAdminDashboard() {
 
               <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[11px] text-emerald-300 flex items-start gap-2">
                 <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <span>Al confirmar, el estado pasará a <strong>Pagada</strong> y el creador recibirá de inmediato la notificación en su panel.</span>
+                <span>
+                  {isEditingPayment 
+                    ? 'Al guardar, se actualizarán automáticamente los balances y gastos contables del servidor.'
+                    : 'Al confirmar, el estado pasará a Pagada y el creador recibirá de inmediato la notificación en su panel.'}
+                </span>
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setPayModalOpen(false)}
+                  onClick={() => { setPayModalOpen(false); setIsEditingPayment(false); }}
                   className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition-all"
                 >
                   Cancelar
@@ -3822,7 +4273,11 @@ export default function SuperAdminDashboard() {
                   className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <DollarSign className="w-4 h-4" />
-                  <span>{paySubmitting ? 'Registrando Pago...' : 'Confirmar y Liquidar Pago'}</span>
+                  <span>
+                    {paySubmitting 
+                      ? 'Guardando...' 
+                      : (isEditingPayment ? 'Guardar Cambios de Pago' : 'Confirmar y Liquidar Pago')}
+                  </span>
                 </button>
               </div>
             </form>

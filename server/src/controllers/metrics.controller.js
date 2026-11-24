@@ -8,7 +8,12 @@ function getDashboardMetrics(req, res) {
     const totalPms = db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'pm' AND deleted_at IS NULL").get().c;
     const totalCreators = db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'creator' AND deleted_at IS NULL").get().c;
     const totalServers = db.prepare('SELECT COUNT(*) as c FROM servers WHERE deleted_at IS NULL').get().c;
-    const activeCampaigns = db.prepare("SELECT COUNT(*) as c FROM campaigns WHERE deleted_at IS NULL AND status = 'active'").get().c;
+    const activeCampaigns = db.prepare(`
+      SELECT COUNT(*) as c 
+      FROM campaigns c
+      JOIN servers s ON c.server_id = s.id
+      WHERE c.deleted_at IS NULL AND s.deleted_at IS NULL AND c.status = 'active'
+    `).get().c;
 
     // Critical Alerts:
     // 1. Servers without PM
@@ -22,20 +27,32 @@ function getDashboardMetrics(req, res) {
       SELECT u.id, u.full_name, cp.alias, cp.avatar_url FROM users u
       LEFT JOIN creator_profiles cp ON u.id = cp.user_id
       WHERE u.role = 'creator' AND u.deleted_at IS NULL
-      AND u.id NOT IN (SELECT creator_id FROM server_creators WHERE status = 'active')
+      AND u.id NOT IN (
+        SELECT sc.creator_id FROM server_creators sc
+        JOIN servers s ON sc.server_id = s.id
+        WHERE sc.status = 'active' AND s.deleted_at IS NULL
+      )
     `).all();
 
     // 3. Pending reviews
-    const pendingReviewsCount = db.prepare("SELECT COUNT(*) as c FROM activity_evidences WHERE status = 'review'").get().c;
+    const pendingReviewsCount = db.prepare(`
+      SELECT COUNT(*) as c 
+      FROM activity_evidences ae
+      JOIN campaigns c ON ae.campaign_id = c.id
+      JOIN servers s ON c.server_id = s.id
+      WHERE ae.status = 'review' AND c.deleted_at IS NULL AND s.deleted_at IS NULL
+    `).get().c;
 
     // Aggregates
     const aggregates = db.prepare(`
       SELECT 
-        COALESCE(SUM(duration_minutes), 0) as total_minutes,
-        COALESCE(SUM(total_views), 0) as total_views,
-        COALESCE(MAX(peak_viewers), 0) as max_peak
-      FROM activity_evidences 
-      WHERE status IN ('approved', 'paid')
+        COALESCE(SUM(ae.duration_minutes), 0) as total_minutes,
+        COALESCE(SUM(ae.total_views), 0) as total_views,
+        COALESCE(MAX(ae.peak_viewers), 0) as max_peak
+      FROM activity_evidences ae 
+      JOIN campaigns c ON ae.campaign_id = c.id
+      JOIN servers s ON c.server_id = s.id
+      WHERE ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL
     `).get();
 
     return res.json({
@@ -60,9 +77,28 @@ function getDashboardMetrics(req, res) {
 
   if (role === 'director_ops') {
     const totalServers = db.prepare('SELECT COUNT(*) as c FROM servers WHERE deleted_at IS NULL').get().c;
-    const activeCampaigns = db.prepare("SELECT COUNT(*) as c FROM campaigns WHERE deleted_at IS NULL AND status = 'active'").get().c;
-    const pendingReviews = db.prepare("SELECT COUNT(*) as c FROM activity_evidences WHERE status = 'review'").get().c;
-    const aggregates = db.prepare("SELECT COALESCE(SUM(duration_minutes), 0) as m, COALESCE(SUM(total_views), 0) as v FROM activity_evidences WHERE status IN ('approved', 'paid')").get();
+    const activeCampaigns = db.prepare(`
+      SELECT COUNT(*) as c 
+      FROM campaigns c
+      JOIN servers s ON c.server_id = s.id
+      WHERE c.deleted_at IS NULL AND s.deleted_at IS NULL AND c.status = 'active'
+    `).get().c;
+    const pendingReviews = db.prepare(`
+      SELECT COUNT(*) as c 
+      FROM activity_evidences ae
+      JOIN campaigns c ON ae.campaign_id = c.id
+      JOIN servers s ON c.server_id = s.id
+      WHERE ae.status = 'review' AND c.deleted_at IS NULL AND s.deleted_at IS NULL
+    `).get().c;
+    const aggregates = db.prepare(`
+      SELECT 
+        COALESCE(SUM(ae.duration_minutes), 0) as m, 
+        COALESCE(SUM(ae.total_views), 0) as v 
+      FROM activity_evidences ae
+      JOIN campaigns c ON ae.campaign_id = c.id
+      JOIN servers s ON c.server_id = s.id
+      WHERE ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL
+    `).get();
 
     return res.json({
       role,
@@ -80,11 +116,12 @@ function getDashboardMetrics(req, res) {
     const pms = db.prepare(`
       SELECT 
         u.id, u.full_name, u.email,
-        (SELECT COUNT(*) FROM servers s WHERE s.pm_user_id = u.id AND s.deleted_at IS NULL) as servers_count,
-        (SELECT COUNT(*) FROM campaigns c WHERE c.pm_user_id = u.id AND c.status = 'active') as active_campaigns_count,
+        (SELECT COUNT(*) FROM servers s WHERE (s.pm_user_id = u.id OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = u.id AND sp.status = 'active')) AND s.deleted_at IS NULL) as servers_count,
+        (SELECT COUNT(*) FROM campaigns c JOIN servers s ON c.server_id = s.id WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id)) AND c.deleted_at IS NULL AND s.deleted_at IS NULL AND c.status = 'active') as active_campaigns_count,
         (SELECT COUNT(*) FROM activity_evidences ae 
          JOIN campaigns c ON ae.campaign_id = c.id 
-         WHERE c.pm_user_id = u.id AND ae.status = 'review') as pending_reviews_count
+         JOIN servers s ON c.server_id = s.id 
+         WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id)) AND ae.status = 'review' AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as pending_reviews_count
       FROM users u
       WHERE u.role = 'pm' AND u.deleted_at IS NULL
     `).all();
@@ -99,9 +136,9 @@ function getDashboardMetrics(req, res) {
     const creators = db.prepare(`
       SELECT 
         cp.id, cp.alias, cp.is_available, u.full_name,
-        (SELECT COUNT(DISTINCT sc.server_id) FROM server_creators sc WHERE sc.creator_id = u.id AND sc.status = 'active') as servers_count,
-        (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as minutes,
-        (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as views
+        (SELECT COUNT(DISTINCT sc.server_id) FROM server_creators sc JOIN servers s ON sc.server_id = s.id WHERE sc.creator_id = u.id AND sc.status = 'active' AND s.deleted_at IS NULL) as servers_count,
+        (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as minutes,
+        (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as views
       FROM creator_profiles cp
       JOIN users u ON cp.user_id = u.id
       WHERE u.deleted_at IS NULL
@@ -117,14 +154,31 @@ function getDashboardMetrics(req, res) {
   }
 
   if (role === 'pm') {
-    const myServers = db.prepare('SELECT COUNT(*) as c FROM servers WHERE pm_user_id = ? AND deleted_at IS NULL').get(userId).c;
-    const myCampaigns = db.prepare("SELECT COUNT(*) as c FROM campaigns WHERE pm_user_id = ? AND deleted_at IS NULL AND status = 'active'").get(userId).c;
+    const myServers = db.prepare(`
+      SELECT COUNT(*) as c FROM servers 
+      WHERE (pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = servers.id AND sp.pm_id = ? AND sp.status = 'active')) 
+        AND deleted_at IS NULL
+    `).get(userId, userId).c;
+
+    const myCampaigns = db.prepare(`
+      SELECT COUNT(*) as c 
+      FROM campaigns c
+      JOIN servers s ON c.server_id = s.id
+      WHERE (c.pm_user_id = ? OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = ?)) 
+        AND c.deleted_at IS NULL 
+        AND s.deleted_at IS NULL 
+        AND c.status = 'active'
+    `).get(userId, userId).c;
+
     const myPendingReviews = db.prepare(`
       SELECT COUNT(*) as c FROM activity_evidences ae
       JOIN campaigns c ON ae.campaign_id = c.id
       JOIN servers s ON c.server_id = s.id
-      WHERE (s.pm_user_id = ? OR c.pm_user_id = ?) AND ae.status = 'review'
-    `).get(userId, userId).c;
+      WHERE (s.pm_user_id = ? OR c.pm_user_id = ? OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = ?) OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active')) 
+        AND ae.status = 'review'
+        AND c.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+    `).get(userId, userId, userId, userId).c;
 
     const myImpact = db.prepare(`
       SELECT 
@@ -133,8 +187,11 @@ function getDashboardMetrics(req, res) {
       FROM activity_evidences ae
       JOIN campaigns c ON ae.campaign_id = c.id
       JOIN servers s ON c.server_id = s.id
-      WHERE (s.pm_user_id = ? OR c.pm_user_id = ?) AND ae.status IN ('approved', 'paid')
-    `).get(userId, userId);
+      WHERE (s.pm_user_id = ? OR c.pm_user_id = ? OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = ?) OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active')) 
+        AND ae.status IN ('approved', 'paid')
+        AND c.deleted_at IS NULL
+        AND s.deleted_at IS NULL
+    `).get(userId, userId, userId, userId);
 
     return res.json({
       role,
@@ -151,21 +208,24 @@ function getDashboardMetrics(req, res) {
   if (role === 'creator') {
     const myEvidences = db.prepare(`
       SELECT 
-        COUNT(CASE WHEN status IN ('approved', 'paid') THEN 1 END) as approved_count,
-        COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid_count,
-        COUNT(CASE WHEN status = 'review' THEN 1 END) as review_count,
-        COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_count,
-        COALESCE(SUM(CASE WHEN status IN ('approved', 'paid') THEN duration_minutes ELSE 0 END), 0) as total_minutes,
-        COALESCE(SUM(CASE WHEN status IN ('approved', 'paid') THEN total_views ELSE 0 END), 0) as total_views,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN payout_amount ELSE 0 END), 0) as total_earned
-      FROM activity_evidences
-      WHERE creator_id = ?
+        COUNT(CASE WHEN ae.status IN ('approved', 'paid') THEN 1 END) as approved_count,
+        COUNT(CASE WHEN ae.status = 'paid' THEN 1 END) as paid_count,
+        COUNT(CASE WHEN ae.status = 'review' THEN 1 END) as review_count,
+        COUNT(CASE WHEN ae.status = 'rejected' THEN 1 END) as rejected_count,
+        COALESCE(SUM(CASE WHEN ae.status IN ('approved', 'paid') THEN ae.duration_minutes ELSE 0 END), 0) as total_minutes,
+        COALESCE(SUM(CASE WHEN ae.status IN ('approved', 'paid') THEN ae.total_views ELSE 0 END), 0) as total_views,
+        COALESCE(SUM(CASE WHEN ae.status = 'paid' THEN ae.payout_amount ELSE 0 END), 0) as total_earned
+      FROM activity_evidences ae
+      JOIN campaigns c ON ae.campaign_id = c.id
+      JOIN servers s ON c.server_id = s.id
+      WHERE ae.creator_id = ? AND c.deleted_at IS NULL AND s.deleted_at IS NULL
     `).get(userId);
 
     const activeCampaigns = db.prepare(`
       SELECT COUNT(*) as c FROM campaign_creators cc
       JOIN campaigns c ON cc.campaign_id = c.id
-      WHERE cc.creator_id = ? AND c.status = 'active'
+      JOIN servers s ON c.server_id = s.id
+      WHERE cc.creator_id = ? AND c.status = 'active' AND c.deleted_at IS NULL AND s.deleted_at IS NULL
     `).get(userId).c;
 
     return res.json({
@@ -207,7 +267,7 @@ function getDashboardMetrics(req, res) {
         COUNT(ae.id) as approved_streams_count
       FROM activity_evidences ae
       JOIN campaigns c ON ae.campaign_id = c.id
-      WHERE c.server_id = ? AND ae.status IN ('approved', 'paid')
+      WHERE c.server_id = ? AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL
     `).get(server.id);
 
     const creators = db.prepare(`
@@ -266,7 +326,7 @@ function getReportsMetrics(req, res) {
     dateFilter = " AND ae.activity_date >= date('now', '-30 days')";
   }
 
-  // 1. Top Streamers by Views and Stream Hours
+  // 1. Top Streamers by Views and Stream Hours (strictly excluding deleted campaigns/servers)
   const rawTopStreamers = db.prepare(`
     SELECT 
       u.id as user_id, u.username, u.full_name, u.status, u.phone,
@@ -276,11 +336,17 @@ function getReportsMetrics(req, res) {
       COALESCE(MAX(ae.peak_viewers), 0) as peak_viewers,
       ROUND(COALESCE(AVG(ae.avg_viewers), 0), 0) as avg_viewers,
       COUNT(ae.id) as approved_streams_count,
-      (SELECT COUNT(DISTINCT sc.server_id) FROM server_creators sc WHERE sc.creator_id = u.id AND sc.status = 'active') as servers_count,
-      (SELECT COUNT(DISTINCT cc.campaign_id) FROM campaign_creators cc WHERE cc.creator_id = u.id) as campaigns_count
+      (SELECT COUNT(DISTINCT sc.server_id) FROM server_creators sc JOIN servers s ON sc.server_id = s.id WHERE sc.creator_id = u.id AND sc.status = 'active' AND s.deleted_at IS NULL) as servers_count,
+      (SELECT COUNT(DISTINCT cc.campaign_id) FROM campaign_creators cc JOIN campaigns c ON cc.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE cc.creator_id = u.id AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as campaigns_count
     FROM users u
     JOIN creator_profiles cp ON u.id = cp.user_id
-    LEFT JOIN activity_evidences ae ON u.id = ae.creator_id AND ae.status IN ('approved', 'paid') ${dateFilter}
+    LEFT JOIN (
+      SELECT ae.* 
+      FROM activity_evidences ae
+      JOIN campaigns c ON ae.campaign_id = c.id
+      JOIN servers s ON c.server_id = s.id
+      WHERE ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL
+    ) ae ON u.id = ae.creator_id ${dateFilter}
     WHERE u.deleted_at IS NULL
     GROUP BY u.id
     ORDER BY total_views DESC, total_minutes DESC
@@ -340,7 +406,12 @@ function getReportsMetrics(req, res) {
       COALESCE(MAX(ae.peak_viewers), 0) as peak_viewers,
       ROUND(COALESCE(AVG(ae.avg_viewers), 0), 0) as avg_viewers
     FROM activity_evidences ae
-    WHERE ae.status IN ('approved', 'paid') ${dateFilter}
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    WHERE ae.status IN ('approved', 'paid') 
+      AND c.deleted_at IS NULL 
+      AND s.deleted_at IS NULL 
+      ${dateFilter}
     GROUP BY ae.platform
     ORDER BY total_views DESC
   `).all().map(p => ({
@@ -376,23 +447,23 @@ function getReportsMetrics(req, res) {
   const pmStats = db.prepare(`
     SELECT 
       u.id, u.username, u.full_name, u.email, u.phone, u.status,
-      (SELECT COUNT(*) FROM servers s WHERE s.pm_user_id = u.id AND s.deleted_at IS NULL) as servers_count,
-      (SELECT COUNT(*) FROM campaigns c WHERE c.pm_user_id = u.id AND c.deleted_at IS NULL AND c.status = 'active') as active_campaigns_count,
+      (SELECT COUNT(*) FROM servers s WHERE (s.pm_user_id = u.id OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = u.id AND sp.status = 'active')) AND s.deleted_at IS NULL) as servers_count,
+      (SELECT COUNT(*) FROM campaigns c JOIN servers s ON c.server_id = s.id WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id)) AND c.deleted_at IS NULL AND s.deleted_at IS NULL AND c.status = 'active') as active_campaigns_count,
       (SELECT COUNT(*) FROM activity_evidences ae 
        JOIN campaigns c ON ae.campaign_id = c.id 
        JOIN servers s ON c.server_id = s.id 
-       WHERE (s.pm_user_id = u.id OR c.pm_user_id = u.id) AND ae.status IN ('approved', 'paid') ${dateFilter}) as approved_evidences_count,
+       WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id) OR (c.pm_user_id IS NULL AND (s.pm_user_id = u.id OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = u.id AND sp.status = 'active')))) AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL ${dateFilter}) as approved_evidences_count,
       COALESCE((
         SELECT SUM(ae.total_views) FROM activity_evidences ae 
         JOIN campaigns c ON ae.campaign_id = c.id 
         JOIN servers s ON c.server_id = s.id 
-        WHERE (s.pm_user_id = u.id OR c.pm_user_id = u.id) AND ae.status IN ('approved', 'paid') ${dateFilter}
+        WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id) OR (c.pm_user_id IS NULL AND (s.pm_user_id = u.id OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = u.id AND sp.status = 'active')))) AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL ${dateFilter}
       ), 0) as total_views_managed,
       COALESCE((
         SELECT SUM(ae.duration_minutes) FROM activity_evidences ae 
         JOIN campaigns c ON ae.campaign_id = c.id 
         JOIN servers s ON c.server_id = s.id 
-        WHERE (s.pm_user_id = u.id OR c.pm_user_id = u.id) AND ae.status IN ('approved', 'paid') ${dateFilter}
+        WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id) OR (c.pm_user_id IS NULL AND (s.pm_user_id = u.id OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = u.id AND sp.status = 'active')))) AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL ${dateFilter}
       ), 0) as total_minutes_managed
     FROM users u
     WHERE u.role = 'pm' AND u.deleted_at IS NULL
@@ -402,7 +473,7 @@ function getReportsMetrics(req, res) {
     total_hours_managed: (pm.total_minutes_managed / 60).toFixed(1)
   }));
 
-  // 6. Campaign Financial & Budget Execution
+  // 6. Campaign Financial & Budget Execution (strictly non-deleted campaigns & servers)
   const campaignStats = db.prepare(`
     SELECT 
       c.id, c.name, c.status, c.budget_internal, c.start_date, c.end_date,
@@ -416,7 +487,7 @@ function getReportsMetrics(req, res) {
     JOIN servers s ON c.server_id = s.id
     LEFT JOIN users pm ON c.pm_user_id = pm.id
     LEFT JOIN activity_evidences ae ON c.id = ae.campaign_id AND ae.status IN ('approved', 'paid') ${dateFilter}
-    WHERE c.deleted_at IS NULL
+    WHERE c.deleted_at IS NULL AND s.deleted_at IS NULL
     GROUP BY c.id
     ORDER BY c.budget_internal DESC, total_views DESC
   `).all().map(camp => {
@@ -435,30 +506,56 @@ function getReportsMetrics(req, res) {
   // 7. Evidence Audit QA Metrics (Funnel)
   const auditEvidenceStats = db.prepare(`
     SELECT 
-      COUNT(CASE WHEN status IN ('approved', 'paid') THEN 1 END) as approved_count,
-      COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid_count,
-      COUNT(CASE WHEN status = 'approved' THEN 1 END) as pending_payout_count,
-      COUNT(CASE WHEN status = 'review' THEN 1 END) as review_count,
-      COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_count,
-      COALESCE(SUM(CASE WHEN status = 'paid' THEN payout_amount ELSE 0 END), 0) as total_payout_liquidated,
-      COUNT(*) as total_count
+      COUNT(CASE WHEN ae.status IN ('approved', 'paid') THEN 1 END) as approved_count,
+      COUNT(CASE WHEN ae.status = 'paid' THEN 1 END) as paid_count,
+      COUNT(CASE WHEN ae.status = 'approved' THEN 1 END) as pending_payout_count,
+      COUNT(CASE WHEN ae.status = 'review' THEN 1 END) as review_count,
+      COUNT(CASE WHEN ae.status = 'rejected' THEN 1 END) as rejected_count,
+      COALESCE(SUM(CASE WHEN ae.status = 'paid' THEN ae.payout_amount ELSE 0 END), 0) as total_payout_liquidated,
+      COUNT(ae.id) as total_count
     FROM activity_evidences ae
-    WHERE 1=1 ${dateFilter}
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    WHERE c.deleted_at IS NULL AND s.deleted_at IS NULL ${dateFilter}
   `).get();
 
   const totalEv = auditEvidenceStats.total_count || 0;
   const approvalRate = totalEv > 0 ? ((auditEvidenceStats.approved_count / totalEv) * 100).toFixed(1) : 100;
 
-  // 8. Overall Summary
-  const totalCampaignBudget = db.prepare("SELECT COALESCE(SUM(budget_internal), 0) as b FROM campaigns WHERE deleted_at IS NULL").get().b;
-  const peakViewersGlobal = db.prepare("SELECT COALESCE(MAX(peak_viewers), 0) as p FROM activity_evidences WHERE status IN ('approved', 'paid')").get().p;
+  // 8. Overall Summary (only active campaigns and non-deleted servers)
+  const totalCampaignBudget = db.prepare(`
+    SELECT COALESCE(SUM(c.budget_internal), 0) as b 
+    FROM campaigns c 
+    JOIN servers s ON c.server_id = s.id 
+    WHERE c.deleted_at IS NULL AND s.deleted_at IS NULL
+  `).get().b;
+
+  const peakViewersGlobal = db.prepare(`
+    SELECT COALESCE(MAX(ae.peak_viewers), 0) as p 
+    FROM activity_evidences ae 
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    WHERE ae.status IN ('approved', 'paid') 
+      AND c.deleted_at IS NULL 
+      AND s.deleted_at IS NULL
+  `).get().p;
+
+  const totalApprovedStreams = db.prepare(`
+    SELECT COUNT(*) as c 
+    FROM activity_evidences ae 
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    WHERE ae.status IN ('approved', 'paid') 
+      AND c.deleted_at IS NULL 
+      AND s.deleted_at IS NULL
+  `).get().c;
 
   return res.json({
     timeRange,
     summary: {
       total_views: totalViewsAccumulated,
       total_stream_hours: (totalMinutesAccumulated / 60).toFixed(1),
-      total_approved_streams: db.prepare("SELECT COUNT(*) as c FROM activity_evidences WHERE status IN ('approved', 'paid')").get().c,
+      total_approved_streams: totalApprovedStreams,
       total_paid_streams: auditEvidenceStats.paid_count,
       pending_payout_streams: auditEvidenceStats.pending_payout_count,
       total_paid_out: auditEvidenceStats.total_payout_liquidated,
@@ -480,6 +577,11 @@ function getReportsMetrics(req, res) {
     campaigns: campaignStats
   });
 }
+
+module.exports = {
+  getDashboardMetrics,
+  getReportsMetrics
+};
 
 module.exports = {
   getDashboardMetrics,

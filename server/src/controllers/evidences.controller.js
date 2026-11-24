@@ -36,8 +36,16 @@ function getEvidences(req, res) {
     query += ' AND ae.creator_id = ?';
     params.push(userId);
   } else if (role === 'pm') {
-    query += ' AND (s.pm_user_id = ? OR c.pm_user_id = ?)';
-    params.push(userId, userId);
+    query += ` AND (
+      c.pm_user_id = ? 
+      OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = ?)
+      OR (
+        NOT EXISTS (SELECT 1 FROM campaign_pms cp2 WHERE cp2.campaign_id = c.id)
+        AND c.pm_user_id IS NULL
+        AND (s.pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active'))
+      )
+    )`;
+    params.push(userId, userId, userId, userId);
   } else if (role === 'server_owner') {
     // Server Owner sees approved and paid evidences for their server!
     query += " AND s.owner_user_id = ? AND ae.status IN ('approved', 'paid')";
@@ -141,6 +149,58 @@ function createEvidence(req, res) {
 
   const creatorId = role === 'creator' ? userId : (req.body.creator_id || userId);
 
+  // Validación de límites de evidencias por streamer y acumulado de la campaña
+  if (campaign.target_evidences && campaign.target_evidences > 0) {
+    const creatorCountRow = db.prepare(`
+      SELECT COUNT(*) as cnt 
+      FROM activity_evidences 
+      WHERE campaign_id = ? AND creator_id = ? AND status != 'rejected'
+    `).get(campaign_id, creatorId);
+    const currentCreatorEvidences = creatorCountRow ? creatorCountRow.cnt : 0;
+
+    if (currentCreatorEvidences >= campaign.target_evidences) {
+      return res.status(400).json({
+        error: `Se ha alcanzado el límite máximo de ${campaign.target_evidences} directos/evidencias para la campaña "${campaign.name}". No se permiten más entregas.`
+      });
+    }
+
+    const totalCreatorsRow = db.prepare('SELECT COUNT(*) as cnt FROM campaign_creators WHERE campaign_id = ?').get(campaign_id);
+    const creatorsCount = totalCreatorsRow ? totalCreatorsRow.cnt : 0;
+    const totalMaxEvidences = creatorsCount > 0 ? campaign.target_evidences * creatorsCount : campaign.target_evidences;
+
+    const countRow = db.prepare(`
+      SELECT COUNT(*) as cnt 
+      FROM activity_evidences 
+      WHERE campaign_id = ? AND status != 'rejected'
+    `).get(campaign_id);
+    const totalCampaignEvidences = countRow ? countRow.cnt : 0;
+
+    if (totalCampaignEvidences >= totalMaxEvidences) {
+      return res.status(400).json({
+        error: `Se ha alcanzado el límite máximo de ${totalMaxEvidences} directos/evidencias para la campaña "${campaign.name}". No se permiten más entregas.`
+      });
+    }
+  }
+
+  if (campaign.target_hours && campaign.target_hours > 0) {
+    const reqDuration = parseInt(duration_minutes, 10) || 0;
+    const minutesRow = db.prepare(`
+      SELECT COALESCE(SUM(duration_minutes), 0) as total_min
+      FROM activity_evidences
+      WHERE campaign_id = ? AND status != 'rejected'
+    `).get(campaign_id);
+    const currentMinutes = minutesRow ? minutesRow.total_min : 0;
+    const maxMinutes = Math.round(campaign.target_hours * 60);
+
+    if (currentMinutes + reqDuration > maxMinutes) {
+      const remainingMinutes = Math.max(0, maxMinutes - currentMinutes);
+      const remainingHours = (remainingMinutes / 60).toFixed(1);
+      return res.status(400).json({
+        error: `La duración ingresada (${(reqDuration / 60).toFixed(1)}h) excede el cupo de horas disponible (${remainingHours}h restantes de un límite de ${campaign.target_hours}h) para la campaña "${campaign.name}".`
+      });
+    }
+  }
+
   const result = db.prepare(`
     INSERT INTO activity_evidences (
       campaign_id, creator_id, type, platform, content_url, activity_date,
@@ -164,20 +224,29 @@ function createEvidence(req, res) {
 
   const evidenceId = Number(result.lastInsertRowid);
 
-  // Notify PM in charge
-  const targetPmId = campaign.pm_user_id || campaign.server_pm_id;
-  if (targetPmId) {
+  // Notify PM(s) in charge
+  const campPms = db.prepare('SELECT pm_id FROM campaign_pms WHERE campaign_id = ?').all(campaign_id);
+  let targetPmIds = campPms.map(p => p.pm_id);
+  if (targetPmIds.length === 0 && (campaign.pm_user_id || campaign.server_pm_id)) {
+    targetPmIds = [campaign.pm_user_id || campaign.server_pm_id];
+  }
+  targetPmIds = [...new Set(targetPmIds)];
+
+  if (targetPmIds.length > 0) {
     const creatorUser = db.prepare('SELECT full_name FROM users WHERE id = ?').get(creatorId);
-    db.prepare(`
+    const notifyStmt = db.prepare(`
       INSERT INTO notifications (user_id, title, message, type, link_url)
       VALUES (?, ?, ?, ?, ?)
-    `).run(
-      targetPmId,
-      'Nueva Evidencia Para Revisión',
-      `${creatorUser.full_name} ha enviado una actividad de ${platform} para la campaña "${campaign.name}".`,
-      'info',
-      '/dashboard/pm?tab=review'
-    );
+    `);
+    for (const tPmId of targetPmIds) {
+      notifyStmt.run(
+        tPmId,
+        'Nueva Evidencia Para Revisión',
+        `${creatorUser?.full_name || 'Un creador'} ha enviado una actividad de ${platform} para la campaña "${campaign.name}".`,
+        'info',
+        '/dashboard/pm?tab=review'
+      );
+    }
   }
 
   logAudit(userId, 'EVIDENCE_SUBMITTED', 'activity_evidences', evidenceId, { campaignId: campaign_id, platform }, req);
@@ -206,7 +275,7 @@ function reviewEvidence(req, res) {
   }
 
   const evidence = db.prepare(`
-    SELECT ae.*, c.name as campaign_name, s.owner_user_id, s.name as server_name, s.pm_user_id as server_pm_id, c.pm_user_id as campaign_pm_id
+    SELECT ae.*, c.name as campaign_name, s.id as server_id, s.owner_user_id, s.name as server_name, s.pm_user_id as server_pm_id, c.pm_user_id as campaign_pm_id
     FROM activity_evidences ae
     JOIN campaigns c ON ae.campaign_id = c.id
     JOIN servers s ON c.server_id = s.id
@@ -217,11 +286,22 @@ function reviewEvidence(req, res) {
     return res.status(404).json({ error: 'Evidencia no encontrada.' });
   }
 
-  // Permission check for PM: can only review their assigned servers/campaigns
+  // Permission check for PM: can only review their assigned campaigns (or server fallback if unassigned)
   if (role === 'pm') {
-    const isMyServer = evidence.server_pm_id === userId || evidence.campaign_pm_id === userId;
-    if (!isMyServer) {
-      return res.status(403).json({ error: 'No tienes permiso para revisar evidencias de este servidor.' });
+    const isAssignedToCamp = evidence.campaign_pm_id === userId ||
+      db.prepare("SELECT 1 FROM campaign_pms WHERE campaign_id = ? AND pm_id = ?").get(evidence.campaign_id, userId);
+    const hasAssignedPms = db.prepare("SELECT 1 FROM campaign_pms WHERE campaign_id = ?").get(evidence.campaign_id) || evidence.campaign_pm_id;
+
+    let isAllowed = false;
+    if (hasAssignedPms) {
+      isAllowed = !!isAssignedToCamp;
+    } else {
+      isAllowed = evidence.server_pm_id === userId || 
+                  db.prepare("SELECT 1 FROM server_pms WHERE server_id = ? AND pm_id = ? AND status = 'active'").get(evidence.server_id, userId);
+    }
+
+    if (!isAllowed) {
+      return res.status(403).json({ error: 'No tienes permiso para revisar evidencias de esta campaña.' });
     }
   }
 
@@ -372,9 +452,202 @@ function payEvidence(req, res) {
   });
 }
 
+function updateEvidencePayment(req, res) {
+  const { id: userId, role } = req.user;
+  const evidenceId = parseInt(req.params.id, 10);
+  const { payout_amount, payment_reference, payment_notes, paid_at } = req.body;
+
+  if (role !== 'super_admin' && role !== 'director_ops') {
+    return res.status(403).json({ error: 'Acceso denegado: Únicamente el Administrador puede editar pagos de entregas.' });
+  }
+
+  const parsedAmount = parseFloat(payout_amount);
+  if (isNaN(parsedAmount) || parsedAmount < 0) {
+    return res.status(400).json({ error: 'El monto de liquidación debe ser un número positivo válido.' });
+  }
+
+  const evidence = db.prepare(`
+    SELECT ae.*, c.name as campaign_name, s.name as server_name,
+           u.full_name as creator_name, cp.alias as creator_alias
+    FROM activity_evidences ae
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    JOIN users u ON ae.creator_id = u.id
+    LEFT JOIN creator_profiles cp ON ae.creator_id = cp.user_id
+    WHERE ae.id = ?
+  `).get(evidenceId);
+
+  if (!evidence) {
+    return res.status(404).json({ error: 'Entrega no encontrada.' });
+  }
+
+  if (evidence.status !== 'paid') {
+    return res.status(400).json({ error: 'La entrega no se encuentra en estado pagada.' });
+  }
+
+  const cleanReference = payment_reference && payment_reference.trim() ? payment_reference.trim() : evidence.payment_reference;
+  const cleanNotes = payment_notes !== undefined ? (payment_notes && payment_notes.trim() ? payment_notes.trim() : null) : evidence.payment_notes;
+  const cleanPaidAt = paid_at ? paid_at : evidence.paid_at;
+
+  db.prepare(`
+    UPDATE activity_evidences
+    SET payout_amount = ?,
+        payment_reference = ?,
+        payment_notes = ?,
+        paid_at = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(parsedAmount, cleanReference, cleanNotes, cleanPaidAt, evidenceId);
+
+  // If there was a matching transaction in server_financial_transactions, update it too
+  if (evidence.payment_reference) {
+    db.prepare(`
+      UPDATE server_financial_transactions
+      SET amount = ?, payment_reference = ?, notes = ?, transaction_date = COALESCE(?, transaction_date)
+      WHERE payment_reference = ?
+    `).run(parsedAmount, cleanReference, cleanNotes, paid_at || null, evidence.payment_reference);
+  }
+
+  logAudit(userId, 'EVIDENCE_PAYMENT_UPDATED', 'activity_evidences', evidenceId, {
+    previous_amount: evidence.payout_amount,
+    new_amount: parsedAmount,
+    reference: cleanReference
+  }, req);
+
+  return res.json({
+    message: 'Pago de la entrega actualizado exitosamente.',
+    evidence_id: evidenceId,
+    payout_amount: parsedAmount,
+    payment_reference: cleanReference,
+    paid_at: cleanPaidAt
+  });
+}
+
+function revertEvidencePayment(req, res) {
+  const { id: userId, role } = req.user;
+  const evidenceId = parseInt(req.params.id, 10);
+
+  if (role !== 'super_admin' && role !== 'director_ops') {
+    return res.status(403).json({ error: 'Acceso denegado: Únicamente el Administrador puede anular o eliminar pagos de entregas.' });
+  }
+
+  const evidence = db.prepare(`
+    SELECT ae.*, c.name as campaign_name, s.name as server_name,
+           u.full_name as creator_name, cp.alias as creator_alias
+    FROM activity_evidences ae
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    JOIN users u ON ae.creator_id = u.id
+    LEFT JOIN creator_profiles cp ON ae.creator_id = cp.user_id
+    WHERE ae.id = ?
+  `).get(evidenceId);
+
+  if (!evidence) {
+    return res.status(404).json({ error: 'Entrega no encontrada.' });
+  }
+
+  if (evidence.status !== 'paid') {
+    return res.status(400).json({ error: 'La entrega no se encuentra en estado pagada.' });
+  }
+
+  db.prepare(`
+    UPDATE activity_evidences
+    SET status = 'approved',
+        payout_amount = NULL,
+        paid_at = NULL,
+        paid_by_user_id = NULL,
+        payment_reference = NULL,
+        payment_notes = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(evidenceId);
+
+  // If there was any transaction in server_financial_transactions with this reference, remove it
+  if (evidence.payment_reference) {
+    db.prepare('DELETE FROM server_financial_transactions WHERE payment_reference = ?').run(evidence.payment_reference);
+  }
+
+  // Notify Creator
+  db.prepare(`
+    INSERT INTO notifications (user_id, title, message, type, link_url)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    evidence.creator_id,
+    'Pago de Entrega Anulado',
+    `El pago de tu entrega para "${evidence.campaign_name}" ha sido anulado por el Administrador para corrección. La entrega ha vuelto al estado Aprobado.`,
+    'warning',
+    '/dashboard/creator?tab=evidences'
+  );
+
+  logAudit(userId, 'EVIDENCE_PAYMENT_REVERTED', 'activity_evidences', evidenceId, {
+    previous_payout: evidence.payout_amount,
+    previous_reference: evidence.payment_reference
+  }, req);
+
+  return res.json({
+    message: 'Pago de entrega eliminado y revertido exitosamente. La entrega ha vuelto al estado Aprobado.',
+    evidence_id: evidenceId,
+    status: 'approved'
+  });
+}
+
+function deleteEvidence(req, res) {
+  const { id: userId, role } = req.user;
+  const evidenceId = parseInt(req.params.id, 10);
+
+  const evidence = db.prepare(`
+    SELECT ae.*, c.name as campaign_name, c.server_id, c.pm_user_id as campaign_pm_id, s.pm_user_id as server_pm_id
+    FROM activity_evidences ae
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    WHERE ae.id = ?
+  `).get(evidenceId);
+
+  if (!evidence) {
+    return res.status(404).json({ error: 'Entrega no encontrada.' });
+  }
+
+  if (role === 'creator') {
+    if (evidence.creator_id !== userId) {
+      return res.status(403).json({ error: 'No tienes autorización para eliminar entregas de otros creadores.' });
+    }
+    if (evidence.status === 'paid' || evidence.status === 'approved') {
+      return res.status(400).json({ error: 'No puedes eliminar una entrega que ya ha sido aprobada o pagada. Contacta con tu PM o Administrador.' });
+    }
+  } else if (role === 'pm') {
+    const isAssigned = db.prepare('SELECT 1 FROM campaign_pms WHERE campaign_id = ? AND pm_id = ?').get(evidence.campaign_id, userId) ||
+                       db.prepare('SELECT 1 FROM server_pms WHERE server_id = ? AND pm_id = ?').get(evidence.server_id, userId) ||
+                       evidence.campaign_pm_id === userId || evidence.server_pm_id === userId;
+    if (!isAssigned) {
+      return res.status(403).json({ error: 'No tienes permisos para eliminar entregas de una campaña que no gestionas.' });
+    }
+  } else if (role !== 'super_admin' && role !== 'director_ops') {
+    return res.status(403).json({ error: 'Acceso denegado para eliminar entregas.' });
+  }
+
+  // Remove matching transaction in server_financial_transactions if any
+  if (evidence.payment_reference) {
+    db.prepare('DELETE FROM server_financial_transactions WHERE payment_reference = ?').run(evidence.payment_reference);
+  }
+
+  db.prepare('DELETE FROM activity_evidences WHERE id = ?').run(evidenceId);
+
+  logAudit(userId, 'EVIDENCE_DELETED', 'activity_evidences', evidenceId, {
+    creator_id: evidence.creator_id,
+    campaign_id: evidence.campaign_id,
+    status: evidence.status,
+    payout_amount: evidence.payout_amount
+  }, req);
+
+  return res.json({ message: 'Entrega eliminada correctamente.' });
+}
+
 module.exports = {
   getEvidences,
   createEvidence,
   reviewEvidence,
-  payEvidence
+  payEvidence,
+  updateEvidencePayment,
+  revertEvidencePayment,
+  deleteEvidence
 };

@@ -5,7 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { 
   LayoutDashboard, Users, Server, Target, FileCheck, Shield, 
   BarChart3, Bell, LogOut, ExternalLink, Menu, X, CheckCircle2,
-  AlertTriangle, UserCheck, Flame, DollarSign
+  AlertTriangle, UserCheck, Flame, DollarSign, Receipt, Wallet
 } from 'lucide-react';
 
 export default function DashboardLayout({ children, activeTab, onTabChange }) {
@@ -23,26 +23,43 @@ export default function DashboardLayout({ children, activeTab, onTabChange }) {
       case 'super_admin':
         return [
           { id: 'overview', label: 'Resumen Global', icon: LayoutDashboard },
-          { id: 'reports', label: 'Informes & Analytics', icon: BarChart3 },
-          { id: 'evidences', label: 'Entregas & Pagos', icon: DollarSign },
+
+          { header: 'Gestión' },
+          { id: 'campaigns', label: 'Campañas Globales', icon: Target },
+          { id: 'servers', label: 'Servidores & PMs', icon: Server },
           { id: 'talent', label: 'PMs & Streamers', icon: UserCheck },
           { id: 'users', label: 'Gestión de Usuarios', icon: Users },
-          { id: 'servers', label: 'Servidores & PMs', icon: Server },
-          { id: 'campaigns', label: 'Campañas Globales', icon: Target },
+
+          { header: 'Pagos' },
+          { id: 'evidences', label: 'Entregas & Pagos', icon: DollarSign },
+          { id: 'pm_payouts', label: 'Pagos a PMs', icon: Wallet, badge: 'Finanzas' },
+          { id: 'cutoffs', label: 'Cortes & Gastos', icon: Receipt, badge: 'Cortes' },
+
+          { header: 'Informes' },
+          { id: 'reports', label: 'Informes & Analytics', icon: BarChart3 },
+
+          { header: 'Auditoría' },
           { id: 'audit', label: 'Logs de Auditoría', icon: Shield },
         ];
       case 'director_ops':
         return [
           { id: 'overview', label: 'Supervisión Operativa', icon: LayoutDashboard },
+          { header: 'Gestión' },
           { id: 'servers', label: 'Servidores Activos', icon: Server },
           { id: 'campaigns', label: 'Campañas en Curso', icon: Target },
+          { header: 'Pagos' },
+          { id: 'pm_payouts', label: 'Pagos a PMs', icon: Wallet },
+          { header: 'Auditoría' },
           { id: 'audit', label: 'Registro de Incidencias', icon: Shield },
         ];
       case 'director_pms':
         return [
           { id: 'overview', label: 'Supervisión de PMs', icon: LayoutDashboard },
+          { header: 'Gestión' },
           { id: 'servers', label: 'Servidores Asignados', icon: Server },
           { id: 'campaigns', label: 'Cumplimiento', icon: Target },
+          { header: 'Pagos' },
+          { id: 'pm_payouts', label: 'Pagos a PMs', icon: Wallet },
         ];
       case 'director_creators':
         return [
@@ -67,6 +84,7 @@ export default function DashboardLayout({ children, activeTab, onTabChange }) {
       case 'server_owner':
         return [
           { id: 'overview', label: 'Mi Servidor', icon: Server },
+          { id: 'campaigns', label: 'Campañas del Servidor', icon: Target },
           { id: 'creators', label: 'Creadores Asignados', icon: Users },
           { id: 'results', label: 'Evidencias Verificadas', icon: CheckCircle2 },
         ];
@@ -121,8 +139,19 @@ export default function DashboardLayout({ children, activeTab, onTabChange }) {
         </div>
 
         {/* Nav list */}
-        <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto pt-2">
-          {navItems.map(item => {
+        <nav className="flex-1 px-3 space-y-1 overflow-y-auto pt-2">
+          {navItems.map((item, idx) => {
+            if (item.header) {
+              return (
+                <div
+                  key={`hdr-${idx}`}
+                  className="pt-3 pb-1 px-3 text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5 select-none"
+                >
+                  <span>{item.header}</span>
+                  <div className="h-px bg-slate-800/80 flex-1 ml-1" />
+                </div>
+              );
+            }
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (
@@ -272,19 +301,34 @@ export default function DashboardLayout({ children, activeTab, onTabChange }) {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <nav className="flex-1 space-y-1.5 py-4">
-              {navItems.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => { onTabChange(item.id); setMobileSidebarOpen(false); }}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold ${
-                    activeTab === item.id ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-300 hover:bg-slate-800'
-                  }`}
-                >
-                  <item.icon className="w-4 h-4" />
-                  <span>{item.label}</span>
-                </button>
-              ))}
+            <nav className="flex-1 space-y-1 py-4 overflow-y-auto">
+              {navItems.map((item, idx) => {
+                if (item.header) {
+                  return (
+                    <div
+                      key={`mob-hdr-${idx}`}
+                      className="pt-3 pb-1 px-2 text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5 select-none"
+                    >
+                      <span>{item.header}</span>
+                      <div className="h-px bg-slate-800/80 flex-1 ml-1" />
+                    </div>
+                  );
+                }
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => { onTabChange(item.id); setMobileSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold ${
+                      isActive ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
             </nav>
             <button onClick={logout} className="w-full py-2 text-xs text-red-400 flex items-center gap-2">
               <LogOut className="w-4 h-4" />

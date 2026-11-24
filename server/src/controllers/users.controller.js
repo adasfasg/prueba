@@ -19,12 +19,12 @@ function getUsers(req, res) {
       cp.hourly_rate_internal,
       cp.fixed_rate_internal,
       cp.commission_percentage,
-      (SELECT COUNT(*) FROM servers s WHERE s.pm_user_id = u.id AND s.deleted_at IS NULL) as pm_servers_count,
-      (SELECT COUNT(*) FROM campaigns c WHERE c.pm_user_id = u.id AND c.deleted_at IS NULL AND c.status = 'active') as pm_campaigns_count,
-      (SELECT COUNT(*) FROM server_creators sc WHERE sc.creator_id = u.id AND sc.status = 'active') as creator_servers_count,
-      (SELECT COUNT(DISTINCT cc.campaign_id) FROM campaign_creators cc WHERE cc.creator_id = u.id) as creator_campaigns_count,
-      (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as total_minutes_streamed,
-      (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as total_views_accumulated
+      (SELECT COUNT(*) FROM servers s WHERE (s.pm_user_id = u.id OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = u.id AND sp.status = 'active')) AND s.deleted_at IS NULL) as pm_servers_count,
+      (SELECT COUNT(*) FROM campaigns c JOIN servers s ON c.server_id = s.id WHERE (c.pm_user_id = u.id OR EXISTS (SELECT 1 FROM campaign_pms cp WHERE cp.campaign_id = c.id AND cp.pm_id = u.id)) AND c.deleted_at IS NULL AND s.deleted_at IS NULL AND c.status = 'active') as pm_campaigns_count,
+      (SELECT COUNT(*) FROM server_creators sc JOIN servers s ON sc.server_id = s.id WHERE sc.creator_id = u.id AND sc.status = 'active' AND s.deleted_at IS NULL) as creator_servers_count,
+      (SELECT COUNT(DISTINCT cc.campaign_id) FROM campaign_creators cc JOIN campaigns c ON cc.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE cc.creator_id = u.id AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as creator_campaigns_count,
+      (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as total_minutes_streamed,
+      (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as total_views_accumulated
     FROM users u
     LEFT JOIN creator_profiles cp ON u.id = cp.user_id
     WHERE u.deleted_at IS NULL

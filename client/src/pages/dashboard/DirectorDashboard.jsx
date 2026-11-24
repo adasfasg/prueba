@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
+import PmPayoutsManagement from '../../components/PmPayoutsManagement';
 import { useAuth } from '../../context/AuthContext';
 import { 
   Users, Server, Target, Shield, BarChart3, AlertCircle, 
@@ -61,8 +62,13 @@ export default function DirectorDashboard() {
         </p>
       </div>
 
+      {/* PM Payouts Tab */}
+      {activeTab === 'pm_payouts' && (
+        <PmPayoutsManagement token={token} />
+      )}
+
       {/* Case 1: Director Operacional */}
-      {user.role === 'director_ops' && (
+      {user.role === 'director_ops' && activeTab === 'overview' && (
         <div className="space-y-6">
           {metrics && metrics.summary && (
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -122,7 +128,7 @@ export default function DirectorDashboard() {
       )}
 
       {/* Case 2: Director de PMs */}
-      {user.role === 'director_pms' && (
+      {user.role === 'director_pms' && activeTab === 'overview' && (
         <div className="space-y-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
             <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">

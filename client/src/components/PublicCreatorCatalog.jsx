@@ -276,7 +276,7 @@ export default function PublicCreatorCatalog({ onSelectCreatorForContact }) {
                       onClick={() => onSelectCreatorForContact && onSelectCreatorForContact(creator)}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-slate-950 border border-amber-500/30 hover:border-amber-400 text-xs font-bold rounded-xl transition-all"
                     >
-                      <span>Contratar</span>
+                      <span>Contactar</span>
                       <Send className="w-3.5 h-3.5" />
                     </button>
                   </div>

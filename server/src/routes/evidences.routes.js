@@ -41,4 +41,13 @@ router.put('/:id/review', authenticateToken, requireRole(['super_admin', 'direct
 // Pay evidence - Only Super Admin and Director Ops
 router.post('/:id/pay', authenticateToken, requireRole(['super_admin', 'director_ops']), evidencesController.payEvidence);
 
+// Update evidence payment - Only Super Admin and Director Ops
+router.put('/:id/pay', authenticateToken, requireRole(['super_admin', 'director_ops']), evidencesController.updateEvidencePayment);
+
+// Revert/Delete evidence payment - Only Super Admin and Director Ops
+router.delete('/:id/pay', authenticateToken, requireRole(['super_admin', 'director_ops']), evidencesController.revertEvidencePayment);
+
+// Delete evidence (Admin, Director Ops, PM for campaign, Creator if pending/review)
+router.delete('/:id', authenticateToken, requireRole(['super_admin', 'director_ops', 'pm', 'creator']), evidencesController.deleteEvidence);
+
 module.exports = router;

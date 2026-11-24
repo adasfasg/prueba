@@ -25,17 +25,17 @@ function getPrivateCreators(req, res) {
       cp.hourly_rate_internal,
       cp.fixed_rate_internal,
       cp.commission_percentage,
-      (SELECT COUNT(DISTINCT sc.server_id) FROM server_creators sc WHERE sc.creator_id = u.id AND sc.status = 'active') as assigned_servers_count,
-      (SELECT COUNT(DISTINCT cc.campaign_id) FROM campaign_creators cc WHERE cc.creator_id = u.id) as assigned_campaigns_count,
-      (SELECT COUNT(ae.id) FROM activity_evidences ae WHERE ae.creator_id = u.id) as total_evidences,
-      (SELECT COUNT(ae.id) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status = 'approved') as approved_evidences,
-      (SELECT COUNT(ae.id) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status = 'paid') as paid_evidences,
-      (SELECT COUNT(ae.id) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status = 'review') as review_evidences,
-      (SELECT COUNT(ae.id) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status = 'rejected') as rejected_evidences,
-      (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as total_minutes_streamed,
-      (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as total_views_accumulated,
-      (SELECT COALESCE(ROUND(AVG(ae.avg_viewers)), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as avg_viewers,
-      (SELECT COALESCE(MAX(ae.peak_viewers), 0) FROM activity_evidences ae WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid')) as peak_viewers
+      (SELECT COUNT(DISTINCT sc.server_id) FROM server_creators sc JOIN servers s ON sc.server_id = s.id WHERE sc.creator_id = u.id AND sc.status = 'active' AND s.deleted_at IS NULL) as assigned_servers_count,
+      (SELECT COUNT(DISTINCT cc.campaign_id) FROM campaign_creators cc JOIN campaigns c ON cc.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE cc.creator_id = u.id AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as assigned_campaigns_count,
+      (SELECT COUNT(ae.id) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as total_evidences,
+      (SELECT COUNT(ae.id) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status = 'approved' AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as approved_evidences,
+      (SELECT COUNT(ae.id) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status = 'paid' AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as paid_evidences,
+      (SELECT COUNT(ae.id) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status = 'review' AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as review_evidences,
+      (SELECT COUNT(ae.id) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status = 'rejected' AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as rejected_evidences,
+      (SELECT COALESCE(SUM(ae.duration_minutes), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as total_minutes_streamed,
+      (SELECT COALESCE(SUM(ae.total_views), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as total_views_accumulated,
+      (SELECT COALESCE(ROUND(AVG(ae.avg_viewers)), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as avg_viewers,
+      (SELECT COALESCE(MAX(ae.peak_viewers), 0) FROM activity_evidences ae JOIN campaigns c ON ae.campaign_id = c.id JOIN servers s ON c.server_id = s.id WHERE ae.creator_id = u.id AND ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL) as peak_viewers
     FROM creator_profiles cp
     JOIN users u ON cp.user_id = u.id
     WHERE u.deleted_at IS NULL
@@ -58,13 +58,15 @@ function getPrivateCreators(req, res) {
     const assignedRows = db.prepare(`
       SELECT sc.creator_id FROM server_creators sc
       JOIN servers s ON sc.server_id = s.id
-      WHERE s.pm_user_id = ? AND sc.status = 'active' AND s.deleted_at IS NULL
+      WHERE (s.pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active'))
+        AND sc.status = 'active' AND s.deleted_at IS NULL
       UNION
       SELECT cc.creator_id FROM campaign_creators cc
       JOIN campaigns c ON cc.campaign_id = c.id
       LEFT JOIN servers s ON c.server_id = s.id
-      WHERE (c.pm_user_id = ? OR s.pm_user_id = ?) AND c.deleted_at IS NULL
-    `).all(userId, userId, userId);
+      WHERE (c.pm_user_id = ? OR s.pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active'))
+        AND c.deleted_at IS NULL
+    `).all(userId, userId, userId, userId, userId);
 
     assignedRows.forEach(r => pmAssignedCreatorIds.add(r.creator_id));
   }
@@ -212,13 +214,13 @@ function updateCreatorProfile(req, res) {
     const underCharge = db.prepare(`
       SELECT 1 FROM server_creators sc
       JOIN servers s ON sc.server_id = s.id
-      WHERE sc.creator_id = ? AND s.pm_user_id = ? AND sc.status = 'active' AND s.deleted_at IS NULL
+      WHERE sc.creator_id = ? AND (s.pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active')) AND sc.status = 'active' AND s.deleted_at IS NULL
       UNION
       SELECT cc.creator_id FROM campaign_creators cc
       JOIN campaigns c ON cc.campaign_id = c.id
       LEFT JOIN servers s ON c.server_id = s.id
-      WHERE cc.creator_id = ? AND (c.pm_user_id = ? OR s.pm_user_id = ?) AND c.deleted_at IS NULL
-    `).get(existing.user_id, userId, existing.user_id, userId, userId);
+      WHERE cc.creator_id = ? AND (c.pm_user_id = ? OR s.pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = 'active')) AND c.deleted_at IS NULL
+    `).get(existing.user_id, userId, userId, existing.user_id, userId, userId, userId);
 
     if (!underCharge) {
       return res.status(403).json({ 

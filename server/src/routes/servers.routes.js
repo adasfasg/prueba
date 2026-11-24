@@ -15,6 +15,10 @@ router.put('/:id', authenticateToken, requireRole(['super_admin', 'director_ops'
 router.put('/:id/status', authenticateToken, requireRole(['super_admin']), serversController.toggleServerStatus);
 router.delete('/:id', authenticateToken, requireRole(['super_admin']), serversController.deleteServer);
 
+// Assign PM to server - Restricted strictly to Administrator
+router.post('/:id/pms', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.assignPmToServer);
+router.delete('/:id/pms/:pmId', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.removePmFromServer);
+
 // Assign creator to server - Restricted strictly to Administrator
 router.post('/:id/creators', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.assignCreatorToServer);
 router.delete('/:id/creators/:creatorId', authenticateToken, requireRole(['super_admin', 'director_ops']), serversController.removeCreatorFromServer);

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
+import GroupedCampaignsView from '../../components/GroupedCampaignsView';
 import { useAuth } from '../../context/AuthContext';
 import { 
   Target, FileCheck, BarChart3, Users, CheckCircle2, Clock, 
@@ -532,27 +533,15 @@ export default function CreatorDashboard() {
 
       {/* Tab: Mis Campañas */}
       {activeTab === 'campaigns' && (
-        <div className="space-y-6">
-          <h3 className="text-lg font-bold text-white font-heading">Campañas en las que Participas</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {campaigns.map(camp => (
-              <div key={camp.id} className="p-6 bg-slate-900 border border-slate-800 rounded-2xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-amber-400">{camp.server_name}</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400">
-                    {camp.status}
-                  </span>
-                </div>
-                <h4 className="text-base font-bold text-white">{camp.name}</h4>
-                <p className="text-xs text-slate-400">{camp.objective}</p>
-                <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-300">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase">Requisitos pactados:</span>
-                  <div className="mt-1">{camp.requirements || 'Cumplir directos semanales con logo oficial.'}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <GroupedCampaignsView
+          servers={[]}
+          campaigns={campaigns}
+          userRole="creator"
+          readOnly={true}
+          canCreate={false}
+          canEdit={false}
+          canDelete={false}
+        />
       )}
 
       {/* ================= TAB: MI PERFIL (NUEVO DISEÑO DE 3 COLUMNAS COMPLETO) ================= */}

@@ -79,12 +79,23 @@ function initSchema() {
       contact_info TEXT,
       owner_user_id INTEGER REFERENCES users(id),
       pm_user_id INTEGER REFERENCES users(id),
+      budget REAL DEFAULT 0,
       logo_url TEXT,
       website_url TEXT,
       notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME NULL
+    );
+
+    -- Relación Servidor - Múltiples PMs Asignados
+    CREATE TABLE IF NOT EXISTS server_pms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+      pm_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
+      UNIQUE(server_id, pm_id)
     );
 
     -- Relación Servidor - Creadores Asignados
@@ -109,10 +120,22 @@ function initSchema() {
       objective TEXT,
       requirements TEXT,
       budget_internal REAL DEFAULT 0,
+      target_evidences INTEGER DEFAULT 0,
+      target_hours REAL DEFAULT 0,
+      pm_fee REAL DEFAULT 0,
       notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME NULL
+    );
+
+    -- Relación Campaña - Múltiples PMs Asignados a Cargo
+    CREATE TABLE IF NOT EXISTS campaign_pms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      pm_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(campaign_id, pm_id)
     );
 
     -- Creadores vinculados a una Campaña
@@ -193,9 +216,44 @@ function initSchema() {
       status TEXT NOT NULL DEFAULT 'completed' CHECK(status IN ('completed', 'pending')),
       recipient_or_payer_name TEXT,
       recipient_user_id INTEGER REFERENCES users(id),
+      contract_id INTEGER REFERENCES server_contracts(id) ON DELETE SET NULL,
+      campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
       notes TEXT,
       created_by_user_id INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Contratos por Servidor para Streamers y PMs con cálculo de Presupuesto Final y Descuento en Ganancia
+    CREATE TABLE IF NOT EXISTS server_contracts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK(role IN ('pm', 'streamer')),
+      contract_type TEXT NOT NULL CHECK(contract_type IN (
+        'hourly',
+        'fixed_fee',
+        'hybrid',
+        'monthly_retainer',
+        'commission_percentage',
+        'cpm_views'
+      )),
+      title TEXT NOT NULL,
+      base_amount REAL DEFAULT 0,
+      hourly_rate REAL DEFAULT 0,
+      hours_committed REAL DEFAULT 0,
+      cpm_rate REAL DEFAULT 0,
+      commission_percentage REAL DEFAULT 0,
+      total_budgeted REAL NOT NULL DEFAULT 0,
+      total_paid REAL NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'cancelled', 'draft')),
+      start_date DATE,
+      end_date DATE,
+      terms_description TEXT,
+      notes TEXT,
+      created_by_user_id INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     -- Configuraciones del Sistema
@@ -205,6 +263,84 @@ function initSchema() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Migration: Ensure budget column exists in servers
+  try {
+    const srvCols = db.prepare('PRAGMA table_info(servers)').all();
+    if (srvCols && !srvCols.some(c => c.name === 'budget')) {
+      db.exec('ALTER TABLE servers ADD COLUMN budget REAL DEFAULT 0;');
+    }
+  } catch (err) {
+    console.error('[DB Migration error for servers.budget]:', err.message);
+  }
+
+  // Migration: Ensure server_pms table exists and migrate existing servers.pm_user_id
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS server_pms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        pm_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive')),
+        UNIQUE(server_id, pm_id)
+      );
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO server_pms (server_id, pm_id, status)
+      SELECT id, pm_user_id, 'active' FROM servers WHERE pm_user_id IS NOT NULL;
+    `);
+  } catch (err) {
+    console.error('[DB Migration error for server_pms]:', err.message);
+  }
+
+  // Migration: Ensure campaign_pms table exists and backfill existing campaigns.pm_user_id
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS campaign_pms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        pm_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(campaign_id, pm_id)
+      );
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO campaign_pms (campaign_id, pm_id)
+      SELECT id, pm_user_id FROM campaigns WHERE pm_user_id IS NOT NULL;
+    `);
+  } catch (err) {
+    console.error('[DB Migration error for campaign_pms]:', err.message);
+  }
+
+  // Migration: Ensure target_evidences and target_hours exist in campaigns
+  try {
+    const campCols = db.prepare('PRAGMA table_info(campaigns)').all();
+    if (campCols && !campCols.some(c => c.name === 'target_evidences')) {
+      db.exec('ALTER TABLE campaigns ADD COLUMN target_evidences INTEGER DEFAULT 0;');
+    }
+    if (campCols && !campCols.some(c => c.name === 'target_hours')) {
+      db.exec('ALTER TABLE campaigns ADD COLUMN target_hours REAL DEFAULT 0;');
+    }
+    if (campCols && !campCols.some(c => c.name === 'pm_fee')) {
+      db.exec('ALTER TABLE campaigns ADD COLUMN pm_fee REAL DEFAULT 0;');
+    }
+  } catch (err) {
+    console.error('[DB Migration error for campaigns targets]:', err.message);
+  }
+
+  // Migration: Ensure contract_id and campaign_id exist in server_financial_transactions
+  try {
+    const finCols = db.prepare('PRAGMA table_info(server_financial_transactions)').all();
+    if (finCols && !finCols.some(c => c.name === 'contract_id')) {
+      db.exec('ALTER TABLE server_financial_transactions ADD COLUMN contract_id INTEGER REFERENCES server_contracts(id);');
+    }
+    if (finCols && !finCols.some(c => c.name === 'campaign_id')) {
+      db.exec('ALTER TABLE server_financial_transactions ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id);');
+    }
+  } catch (err) {
+    console.error('[DB Migration error for contract_id/campaign_id]:', err.message);
+  }
 
   // Migration: Ensure username column exists in users
   try {
@@ -276,6 +412,18 @@ function initSchema() {
     }
   } catch (err) {
     console.error('[DB Migration activity_evidences error]:', err.message);
+  }
+
+  // Data Integrity: Ensure any campaigns belonging to soft-deleted servers are marked as soft-deleted
+  try {
+    db.prepare(`
+      UPDATE campaigns 
+      SET deleted_at = CURRENT_TIMESTAMP, status = 'completed' 
+      WHERE server_id IN (SELECT id FROM servers WHERE deleted_at IS NOT NULL) 
+        AND deleted_at IS NULL
+    `).run();
+  } catch (err) {
+    console.error('[DB Data Integrity Cleanup error]:', err.message);
   }
 }
 

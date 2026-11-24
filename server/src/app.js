@@ -16,6 +16,7 @@ const auditRoutes = require('./routes/audit.routes');
 const notificationsRoutes = require('./routes/notifications.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const financialsRoutes = require('./routes/financials.routes');
+const contractsRoutes = require('./routes/contracts.routes');
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/financials', financialsRoutes);
+app.use('/api/contracts', contractsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

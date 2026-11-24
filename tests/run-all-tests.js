@@ -710,6 +710,965 @@ async function runTests() {
     const serverStillPresent = allServersRes.data.some(s => s.id === testServerId);
     assert(!serverStillPresent, 'PERSISTENCIA: Servidor eliminado no figura en listado activo');
 
+    // 14. AGRUPACIÓN DE CAMPAÑAS POR SERVIDOR & HISTORIAL DE CAMPAÑAS
+    console.log('\n--- 14. Agrupación de Campañas por Servidor e Historial de Campañas ---');
+
+    // 14.1 Consultar campañas en GET /api/campaigns y verificar metadatos de servidor para agrupación
+    const adminCampsRes = await makeRequest('GET', '/api/campaigns', null, adminToken);
+    assert(adminCampsRes.status === 200 && Array.isArray(adminCampsRes.data), 'GET /api/campaigns retorna lista de campañas');
+    const hasServerGroupMetadata = adminCampsRes.data.every(c => c.server_id && c.server_name && c.server_game);
+    assert(hasServerGroupMetadata, 'AGRUPACIÓN: Cada campaña incluye server_id, server_name y server_game para agrupar por servidor');
+
+    // 14.2 Crear dos campañas en el servidor Astra2 (server_id: 1)
+    const campARes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Astra2 Alpha Launch QA',
+      server_id: 1,
+      start_date: '2026-11-01',
+      end_date: '2026-11-10',
+      objective: 'Apertura fase Alpha con 30h de directos',
+      requirements: 'Logo en stream y enlaces de registro',
+      budget_internal: 400.00,
+      creator_ids: [7] // dragonslayer
+    }, pmToken);
+    assert(campARes.status === 201, 'PM: Crea campaña "Astra2 Alpha Launch QA" activa (201 Created)');
+    const campAId = campARes.data.id;
+
+    const campBRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Astra2 Weekend EXP Boost',
+      server_id: 1,
+      start_date: '2026-11-15',
+      end_date: '2026-11-17',
+      objective: 'Evento de farmeo intensivo de fin de semana',
+      requirements: 'Directos de 3h diarias',
+      budget_internal: 250.00,
+      creator_ids: [7]
+    }, pmToken);
+    assert(campBRes.status === 201, 'PM: Crea campaña "Astra2 Weekend EXP Boost" activa (201 Created)');
+    const campBId = campBRes.data.id;
+
+    // 14.3 Finalizar Campaña A y archivarla en el Historial del Servidor (status = 'completed')
+    const finalizeRes = await makeRequest('PUT', `/api/campaigns/${campAId}`, {
+      status: 'completed'
+    }, pmToken);
+    assert(finalizeRes.status === 200, 'HISTORIAL: PM finaliza Campaña A y la archiva en el Historial (200 OK)');
+
+    // 14.4 Verificar que Campaña A ahora figura con status 'completed' en la API
+    const verifyCampsRes = await makeRequest('GET', '/api/campaigns', null, pmToken);
+    const completedCamp = verifyCampsRes.data.find(c => c.id === campAId);
+    assert(completedCamp && completedCamp.status === 'completed', 'PERSISTENCIA: Campaña archivada con status "completed"');
+
+    // 14.5 Pausar Campaña B
+    const pauseRes = await makeRequest('PUT', `/api/campaigns/${campBId}`, {
+      status: 'paused'
+    }, pmToken);
+    assert(pauseRes.status === 200, 'ESTADO: PM pausa Campaña B temporalmente (status = "paused")');
+
+    // 14.6 Reactivar Campaña A desde el Historial
+    const reactivateCampRes = await makeRequest('PUT', `/api/campaigns/${campAId}`, {
+      status: 'active'
+    }, pmToken);
+    assert(reactivateCampRes.status === 200, 'REACTIVACIÓN: PM reactiva Campaña A del Historial a estado activa (200 OK)');
+
+    // 14.7 Dueño de Servidor consulta GET /api/campaigns
+    const ownerCampsRes = await makeRequest('GET', '/api/campaigns', null, ownerToken);
+    assert(ownerCampsRes.status === 200 && Array.isArray(ownerCampsRes.data), 'DUEÑO SERVIDOR: Consulta campañas de su servidor');
+    const ownerOnlyHisServer = ownerCampsRes.data.every(c => c.server_id === 1);
+    assert(ownerOnlyHisServer, 'RBAC SCOPE: Dueño de Servidor SOLO ve campañas correspondientes a su servidor');
+    const noBudgetLeaked = ownerCampsRes.data.every(c => c.budget_internal === undefined);
+    assert(noBudgetLeaked, 'CONFIDENCIALIDAD: Presupuesto interno de campaña permanece oculto para el Dueño del Servidor');
+
+    // 14.8 Creador consulta GET /api/campaigns
+    const creatorCampsRes = await makeRequest('GET', '/api/campaigns', null, creatorToken);
+    assert(creatorCampsRes.status === 200 && Array.isArray(creatorCampsRes.data), 'CREADOR: Consulta campañas en las que participa');
+    const creatorHasServerData = creatorCampsRes.data.every(c => c.server_name && c.server_game);
+    assert(creatorHasServerData, 'CREADOR AGRUPACIÓN: Creador recibe metadatos de servidor para agrupar sus campañas');
+
+    // 15. CONTRATOS PARA STREAMERS Y PMS, PRESUPUESTO FINAL Y DEDUCCIÓN DE GANANCIA DE SERVIDORES
+    console.log('\n--- 15. Contratos para Streamers y PMs, Presupuesto Final y Deducción de Ganancia ---');
+
+    // 15.1 PM intenta crear un contrato -> 403 Forbidden
+    const pmCreateContractRes = await makeRequest('POST', '/api/contracts', {
+      server_id: 1,
+      user_id: 7,
+      role: 'streamer',
+      contract_type: 'hourly',
+      title: 'Contrato No Autorizado'
+    }, pmToken);
+    assert(pmCreateContractRes.status === 403, 'SEGURIDAD RBAC: PM tiene PROHIBIDO crear contratos oficiales (403 Forbidden)');
+
+    // 15.2 Creador intenta crear un contrato -> 403 Forbidden
+    const creatorCreateContractRes = await makeRequest('POST', '/api/contracts', {
+      server_id: 1,
+      user_id: 7,
+      role: 'streamer',
+      contract_type: 'hourly',
+      title: 'Contrato No Autorizado'
+    }, creatorToken);
+    assert(creatorCreateContractRes.status === 403, 'SEGURIDAD RBAC: Creador tiene PROHIBIDO crear contratos (403 Forbidden)');
+
+    // 15.3 Super Admin crea Contrato Híbrido para Streamer DragonSlayer en Astra2
+    const streamerContractRes = await makeRequest('POST', '/api/contracts', {
+      server_id: 1,
+      user_id: 7, // dragonslayer
+      role: 'streamer',
+      contract_type: 'hybrid',
+      title: 'Contrato Híbrido Apertura Astra2 - DragonSlayer',
+      base_amount: 150.00,
+      hourly_rate: 10.00,
+      hours_committed: 20,
+      terms_description: '20 horas de streaming en horario estelar con overlay oficial.'
+    }, adminToken);
+    assert(streamerContractRes.status === 201, 'SUPER ADMIN: Crea Contrato Híbrido para streamer (201 Created)');
+    assert(streamerContractRes.data.total_budgeted === 350.00, 'MATEMÁTICA CONTRACTUAL: Presupuesto calculado exactamente: $150 base + ($10 * 20h) = $350.00');
+    const streamerContractId = streamerContractRes.data.id;
+
+    // 15.4 Super Admin crea Contrato Fijo para PM Carlos en Astra2
+    const pmContractRes = await makeRequest('POST', '/api/contracts', {
+      server_id: 1,
+      user_id: 5, // pm.carlos
+      role: 'pm',
+      contract_type: 'fixed_fee',
+      title: 'Honorario Fijo Supervisión Astra2 - Carlos Mendoza',
+      base_amount: 350.00,
+      terms_description: 'Supervisión integral de apertura y creadores asignados.'
+    }, adminToken);
+    assert(pmContractRes.status === 201, 'SUPER ADMIN: Crea Contrato Fijo para PM (201 Created)');
+    assert(pmContractRes.data.total_budgeted === 350.00, 'MATEMÁTICA CONTRACTUAL: Presupuesto fijo de PM establecido en $350.00');
+    const pmContractId = pmContractRes.data.id;
+
+    // 15.5 Super Admin consulta P&L con Presupuesto de Contratos y Ganancia Proyectada
+    const finContractsRes = await makeRequest('GET', '/api/financials/servers?server_id=1', null, adminToken);
+    assert(finContractsRes.status === 200, 'FINANZAS: Super Admin consulta balance y contratos del servidor Astra2');
+    const astra2Fin = finContractsRes.data.servers.find(s => s.server_id === 1);
+    assert(astra2Fin && astra2Fin.contracts_summary.total_budgeted === 700.00, 'PRESUPUESTO TOTAL: Servidor acumula $700.00 en presupuesto comprometido ($350 streamer + $350 PM)');
+    assert(astra2Fin && astra2Fin.financials.remaining_committed_budget === 700.00, 'SALDO COMPROMETIDO: $700.00 pendientes de liquidar');
+    assert(astra2Fin && astra2Fin.financials.projected_net_profit === (astra2Fin.financials.total_income - 700.00), 'DEDUCCIÓN DE GANANCIA: Ganancia final proyectada descuenta el 100% del presupuesto de contratos');
+
+    // 15.6 Super Admin liquida un abono de $150.00 al contrato del Streamer
+    const payContractRes = await makeRequest('POST', `/api/contracts/${streamerContractId}/pay`, {
+      amount: 150.00,
+      payment_reference: 'TX-PAY-STREAMER-001',
+      payment_method: 'Transferencia',
+      notes: 'Anticipo por inicio de campaña de apertura'
+    }, adminToken);
+    assert(payContractRes.status === 200, 'PAGOS: Super Admin liquida abono de $150 al contrato del streamer');
+    assert(payContractRes.data.total_paid === 150.00, 'PERSISTENCIA: Total pagado del contrato actualizado a $150.00');
+    assert(payContractRes.data.remaining_balance === 200.00, 'PERSISTENCIA: Saldo pendiente del contrato reducido a $200.00');
+
+    // 15.7 Verificar que el pago se descontó automáticamente de la ganancia en caja del servidor
+    const verifyFinAfterPay = await makeRequest('GET', '/api/financials/servers?server_id=1', null, adminToken);
+    const astra2AfterPay = verifyFinAfterPay.data.servers.find(s => s.server_id === 1);
+    assert(astra2AfterPay.contracts_summary.remaining_balance === 550.00, 'DEDUCCIÓN EN TIEMPO REAL: Saldo pendiente global del servidor reducido a $550.00 ($200 streamer + $350 PM)');
+
+    // 15.8 Creador DragonSlayer consulta sus contratos
+    const creatorContractsRes = await makeRequest('GET', '/api/contracts', null, creatorToken);
+    assert(creatorContractsRes.status === 200, 'CREADOR: Consulta sus contratos activos');
+    const creatorContract = creatorContractsRes.data.find(c => c.id === streamerContractId);
+    assert(creatorContract && creatorContract.total_paid === 150.00 && creatorContract.remaining_balance === 200.00, 'CREADOR: Visualiza su presupuesto, lo que ya cobró y su saldo pendiente');
+
+    // 16. ASIGNACIÓN DE MÚLTIPLES PMS POR SERVIDOR, PRESUPUESTO DE SERVIDOR Y GANANCIA POR SERVIDOR Y POR CAMPAÑA
+    console.log('\n--- 16. Asignación de Múltiples PMs por Servidor, Presupuesto de Servidor y Ganancia por Servidor y por Campaña ---');
+
+    // 16.1 Login 2FA para PM Elena (id: 6)
+    const elenaLogin = await doFullLogin('pm.elena', 'PMForgeX2026!PM2');
+    assert(elenaLogin.status === 200 && elenaLogin.data.token, 'AUTENTICACIÓN: Login y token JWT emitido para PM Elena (id: 6)');
+    const pmElenaToken = elenaLogin.data.token;
+
+    // 16.2 Super Admin crea Servidor con Presupuesto Asignado ($5,000 USD) y múltiples PMs (Carlos id:5 y Elena id:6)
+    const newServerWithMultiplePms = await makeRequest('POST', '/api/servers', {
+      name: 'Metin2 Omniverse QA',
+      game: 'Metin2',
+      budget: 5000.00,
+      pm_ids: [5, 6],
+      notes: 'Servidor multi-PM con presupuesto asignado oficial.'
+    }, adminToken);
+    assert(newServerWithMultiplePms.status === 201, 'SUPER ADMIN: Crea servidor con Presupuesto y Múltiples PMs (201 Created)');
+    const multiServerId = newServerWithMultiplePms.data.id;
+
+    // 16.3 Consultar GET /api/servers y verificar que incluye budget y assigned_pms con ambos PMs
+    const getServersRes = await makeRequest('GET', '/api/servers', null, adminToken);
+    const multiServer = getServersRes.data.find(s => s.id === multiServerId);
+    assert(multiServer && multiServer.budget === 5000.00, 'PRESUPUESTO SERVIDOR: Servidor expone presupuesto asignado de $5000.00 USD');
+    assert(multiServer && Array.isArray(multiServer.assigned_pms) && multiServer.assigned_pms.length === 2, 'MÚLTIPLES PMS: Servidor incluye listado de 2 PMs asignados oficialmente');
+    const pmsIds = (multiServer.assigned_pms || []).map(p => p.pm_id);
+    assert(pmsIds.includes(5) && pmsIds.includes(6), 'INTEGRIDAD MULTI-PM: Tanto Carlos (id:5) como Elena (id:6) figuran asignados al servidor');
+
+    // 16.4 PM Elena (asignada vía server_pms) crea una campaña en el servidor con presupuesto de campaña ($1,200 USD)
+    const elenaCampaignRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Omniverse Beta Launch',
+      server_id: multiServerId,
+      budget_internal: 1200.00,
+      objective: 'Campaña de apertura y reclutamiento inicial'
+    }, pmElenaToken);
+    assert(elenaCampaignRes.status === 201, 'AUTORIZACIÓN MULTI-PM: PM Elena crea campaña exitosamente en servidor multi-PM (201 Created)');
+    const omniverseCampId = elenaCampaignRes.data.id;
+
+    // 16.5 Creador no autorizado a gestionar PMs en servidor -> 403 Forbidden
+    const unauthAddPmRes = await makeRequest('POST', `/api/servers/${multiServerId}/pms`, { pm_id: 6 }, creatorToken);
+    assert(unauthAddPmRes.status === 403, 'SEGURIDAD RBAC: Creador tiene PROHIBIDO asignar PMs a servidores (403 Forbidden)');
+
+    // 16.6 Super Admin añade creador a la campaña, crea evidencia pagada ($200 USD) y registra ingreso de apertura ($3,000 USD)
+    await makeRequest('POST', `/api/campaigns/${omniverseCampId}/creators`, {
+      creator_id: 7,
+      agreement_terms: 'Directos de apertura',
+      payout_internal: 200.00
+    }, adminToken);
+
+    // Registrar ingreso del servidor ($3,000 USD)
+    await makeRequest('POST', '/api/financials/transactions', {
+      server_id: multiServerId,
+      type: 'income',
+      category: 'opening_fee',
+      concept: 'Fee Apertura Oficial Omniverse',
+      amount: 3000.00,
+      transaction_date: '2026-11-19'
+    }, adminToken);
+
+    // Crear y liquidar evidencia de campaña ($200 USD)
+    const createEvRes = await makeRequest('POST', '/api/evidences', {
+      campaign_id: omniverseCampId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/omniverse',
+      activity_date: '2026-11-19',
+      duration_minutes: 120,
+      total_views: 1500
+    }, creatorToken);
+    const omniEvId = createEvRes.data.id;
+
+    // Aprobar y pagar evidencia (exclusivo admin)
+    await makeRequest('PUT', `/api/evidences/${omniEvId}/review`, { status: 'approved' }, adminToken);
+    await makeRequest('POST', `/api/evidences/${omniEvId}/pay`, {
+      payout_amount: 200.00,
+      payment_reference: 'TX-OMNI-001',
+      payment_notes: 'Pago completo de directo Omniverse'
+    }, adminToken);
+
+    // 16.7 Consultar P&L de Servidores y verificar Ganancia por Servidor y Ganancia por Campaña
+    const omniFinRes = await makeRequest('GET', `/api/financials/servers?server_id=${multiServerId}`, null, adminToken);
+    assert(omniFinRes.status === 200, 'FINANZAS: Super Admin consulta P&L detallado de Servidor y Campañas');
+    const omniFin = omniFinRes.data.servers.find(s => s.server_id === multiServerId);
+
+    // Ganancia por Servidor:
+    assert(omniFin && omniFin.financials.server_budget === 5000.00, 'GANANCIA SERVIDOR: Presupuesto del Servidor reflejado en $5000.00 USD');
+    assert(omniFin && omniFin.financials.total_income === 3000.00, 'GANANCIA SERVIDOR: Ingresos totales del servidor reflejados en $3000.00 USD');
+    assert(omniFin && omniFin.financials.net_profit === 2800.00, 'GANANCIA SERVIDOR: Ganancia Neta en Caja calculada: $3000 ingreso - $200 gasto = $2800.00 USD');
+    assert(omniFin && omniFin.financials.budget_remaining === 4800.00, 'PRESUPUESTO SERVIDOR: Saldo de presupuesto restante calculado: $5000 - $200 = $4800.00 USD');
+
+    // Ganancia por Campaña:
+    const omniCampPnl = (omniFin.breakdown?.campaigns_pnl || []).find(c => c.campaign_id === omniverseCampId);
+    assert(omniCampPnl && omniCampPnl.budget === 1200.00, 'GANANCIA CAMPAÑA: Presupuesto de campaña reflejado en $1200.00 USD');
+    assert(omniCampPnl && omniCampPnl.paid_streamers_expense === 200.00, 'GANANCIA CAMPAÑA: Gasto pagado en streamers reflejado en $200.00 USD');
+    assert(omniCampPnl && omniCampPnl.net_profit === 1000.00, 'GANANCIA CAMPAÑA: Ganancia neta calculada exactamente: $1200 presupuesto - $200 pagado = $1000.00 USD');
+    assert(omniCampPnl && omniCampPnl.profit_margin_percentage === 83.3, 'GANANCIA CAMPAÑA: Margen de rentabilidad calculado: 83.3%');
+
+    // 16.8 Desvincular un PM del servidor mediante endpoint dedicado DELETE /api/servers/:id/pms/:pmId
+    const removePmRes = await makeRequest('DELETE', `/api/servers/${multiServerId}/pms/6`, null, adminToken);
+    assert(removePmRes.status === 200, 'GESTIÓN MULTI-PM: Super Admin desvincula un PM del servidor exitosamente (200 OK)');
+    const checkAfterRemove = await makeRequest('GET', '/api/servers', null, adminToken);
+    const multiAfterRemove = checkAfterRemove.data.find(s => s.id === multiServerId);
+    assert(multiAfterRemove.assigned_pms.length === 1 && multiAfterRemove.assigned_pms[0].pm_id === 5, 'PERSISTENCIA MULTI-PM: Servidor conserva al PM restante (Carlos) activo');
+
+    // ========================================================
+    // 17. CONTROL ESTRICTO DE PRESUPUESTO POR SERVIDOR/ACUMULADO Y RESTRICCIÓN DE EVIDENCIAS Y HORAS
+    // ========================================================
+    console.log('\n--- 17. RESTRICCIONES DE PRESUPUESTO Y TOPES DE DIRECTOS/HORAS ---');
+
+    // 17.1 Creación de servidor con presupuesto oficial limitado ($1,000 USD)
+    const budgetServerRes = await makeRequest('POST', '/api/servers', {
+      name: 'Chronos World PvP',
+      game: 'Metin2',
+      budget: 1000.00,
+      pm_ids: [5],
+      notes: 'Servidor con presupuesto estrictamente auditado de $1000 USD.'
+    }, adminToken);
+    assert(budgetServerRes.status === 201, 'CONTROL PRESUPUESTO: Creación de servidor con límite presupuestario de $1,000.00 USD (201 Created)');
+    const budgetServerId = budgetServerRes.data.id;
+
+    // 17.2 Campaña individual que excede el presupuesto total del servidor ($1,500 > $1,000) -> 400 Bad Request
+    const exceedSingleRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Campaña Excesiva Unitaria',
+      server_id: budgetServerId,
+      budget_internal: 1500.00,
+      objective: 'Debe ser rechazada por exceder el tope del servidor'
+    }, adminToken);
+    assert(exceedSingleRes.status === 400, 'VALIDACIÓN TECHO PRESUPUESTO: Rechazo 400 Bad Request al intentar campaña unitaria ($1,500) mayor al servidor ($1,000)');
+    assert(exceedSingleRes.data.error.includes('exceder el presupuesto total del servidor'), 'MENSAJE VALIDACIÓN: Error explícito indicando límite del servidor');
+
+    // 17.3 Creación exitosa de Campaña 1 dentro del presupuesto ($600.00 <= $1,000.00)
+    const camp1Res = await makeRequest('POST', '/api/campaigns', {
+      name: 'Chronos Fase 1 - Teasers',
+      server_id: budgetServerId,
+      budget_internal: 600.00,
+      target_evidences: 10,
+      target_hours: 20.0,
+      objective: 'Fase inicial de promoción'
+    }, adminToken);
+    assert(camp1Res.status === 201, 'CONTROL PRESUPUESTO: Creación exitosa de Campaña 1 ($600.00 USD) dentro del límite del servidor');
+    const camp1Id = camp1Res.data.id;
+
+    // 17.4 Campaña 2 que hace que el acumulado del grupo exceda el servidor ($600 + $500 = $1,100 > $1,000) -> 400 Bad Request
+    const exceedAccumRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Chronos Fase 2 - Exceso Acumulado',
+      server_id: budgetServerId,
+      budget_internal: 500.00,
+      objective: 'Debe ser rechazada porque el acumulado ($1,100) excede los $1,000 disponibles'
+    }, adminToken);
+    assert(exceedAccumRes.status === 400, 'VALIDACIÓN ACUMULADO GRUPO: Rechazo 400 Bad Request cuando el acumulado de campañas excede el presupuesto del servidor');
+    assert(exceedAccumRes.data.error.includes('Presupuesto restante disponible: $400.00'), 'MENSAJE DISPONIBILIDAD: Alerta indica exactamente el saldo remanente ($400.00)');
+
+    // 17.5 Creación válida de Campaña 2 dentro del saldo exacto disponible ($400.00) con límites de directos (2) y horas (4.0h)
+    const camp2Res = await makeRequest('POST', '/api/campaigns', {
+      name: 'Chronos Fase 2 - Directos Estrictos',
+      server_id: budgetServerId,
+      budget_internal: 400.00,
+      target_evidences: 2,
+      target_hours: 4.0,
+      objective: 'Campaña con cupo exacto de 2 directos y 4 horas máximas'
+    }, adminToken);
+    assert(camp2Res.status === 201, 'CUPO CAMPAÑA: Creación exitosa de Campaña 2 ($400.00 USD) agotando el saldo del servidor (2 directos, 4.0h)');
+    const camp2Id = camp2Res.data.id;
+
+    // 17.6 Rechazar actualización de presupuesto si se intenta elevar excediendo el servidor
+    const updateExceedRes = await makeRequest('PUT', `/api/campaigns/${camp2Id}`, {
+      budget_internal: 450.00 // 600 + 450 = 1050 > 1000
+    }, adminToken);
+    assert(updateExceedRes.status === 400, 'VALIDACIÓN UPDATE: Edición de campaña rechazada (400) si el nuevo presupuesto acumulado excede el servidor');
+
+    // 17.7 Asignar creador (user id: 7) a la Campaña 2
+    await makeRequest('POST', `/api/campaigns/${camp2Id}/creators`, {
+      creator_id: 7,
+      agreement_terms: 'Directos limitados',
+      payout_internal: 200.00
+    }, adminToken);
+
+    // 17.8 Streamer entrega Evidencia 1 (2 horas = 120 min) -> Exitosa (201 Created)
+    const ev1Res = await makeRequest('POST', '/api/evidences', {
+      campaign_id: camp2Id,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/chronos-1',
+      activity_date: '2026-11-19',
+      duration_minutes: 120,
+      total_views: 800
+    }, creatorToken);
+    assert(ev1Res.status === 201, 'ENTREGA 1: Streamer registra 1º directo (2h / 120min) en campaña con límites (201 Created)');
+
+    // 17.9 Streamer entrega Evidencia 2 (2 horas = 120 min) -> Exitosa (201 Created)
+    const ev2Res = await makeRequest('POST', '/api/evidences', {
+      campaign_id: camp2Id,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/chronos-2',
+      activity_date: '2026-11-19',
+      duration_minutes: 120,
+      total_views: 950
+    }, creatorToken);
+    assert(ev2Res.status === 201, 'ENTREGA 2: Streamer registra 2º directo (2h / 120min) alcanzando el cupo total de 2 directos y 4.0 horas (201 Created)');
+
+    // 17.10 Restricción: Streamer intenta registrar un 3º directo superando el límite de 2 directos -> 400 Bad Request
+    const ev3Res = await makeRequest('POST', '/api/evidences', {
+      campaign_id: camp2Id,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/chronos-3',
+      activity_date: '2026-11-19',
+      duration_minutes: 60,
+      total_views: 400
+    }, creatorToken);
+    assert(ev3Res.status === 400, 'RESTRICCIÓN TOPE EVIDENCIAS: Intento de entrega 3 rechazada con 400 Bad Request por límite alcanzado');
+    assert(ev3Res.data.error.includes('Se ha alcanzado el límite máximo de 2'), 'MENSAJE LÍMITE DIRECTOS: Error informa claramente que se alcanzó el tope de directos');
+
+    // 17.11 Restricción de horas en campaña dedicada
+    const hoursCampRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Horas Restringidas Test',
+      server_id: budgetServerId,
+      budget_internal: 0, // 0 para no requerir presupuesto
+      target_evidences: 10,
+      target_hours: 3.0,
+      objective: 'Campaña con límite estricto de 3.0 horas'
+    }, adminToken);
+    const hoursCampId = hoursCampRes.data.id;
+    await makeRequest('POST', `/api/campaigns/${hoursCampId}/creators`, { creator_id: 7 }, adminToken);
+
+    // Intento de entrega de 4 horas (240 min) > 3.0 horas límite -> 400 Bad Request
+    const exceedHoursEvRes = await makeRequest('POST', '/api/evidences', {
+      campaign_id: hoursCampId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/long-stream',
+      activity_date: '2026-11-19',
+      duration_minutes: 240,
+      total_views: 500
+    }, creatorToken);
+    assert(exceedHoursEvRes.status === 400, 'RESTRICCIÓN TOPE HORAS: Intento de entrega de 4.0h rechazada con 400 Bad Request por exceder cupo de 3.0h');
+    assert(exceedHoursEvRes.data.error.includes('excede el cupo de horas disponible'), 'MENSAJE LÍMITE HORAS: Error informa que la duración ingresada excede el cupo');
+
+    // ========================================================
+    // 18. INFORME CONSOLIDADO DE GASTOS POR STREAMER, SERVIDORES Y PAGOS DE PMS (POR CORTES O FECHAS)
+    // ========================================================
+    console.log('\n--- 18. INFORME DE GASTOS POR CORTES O FECHAS ---');
+
+    // 18.1 Control de Acceso RBAC estricto
+    const unauthCreatorReport = await makeRequest('GET', '/api/financials/expense-report', null, creatorToken);
+    assert(unauthCreatorReport.status === 403, 'RBAC INFORME: Creador tiene PROHIBIDO consultar el informe de gastos y cortes (403 Forbidden)');
+
+    const unauthPmReport = await makeRequest('GET', '/api/financials/expense-report', null, pmToken);
+    assert(unauthPmReport.status === 403, 'RBAC INFORME: PM tiene PROHIBIDO consultar el informe de gastos de servidores (403 Forbidden)');
+
+    // 18.2 Super Admin consulta informe histórico completo (cutoff=all)
+    const adminReportAll = await makeRequest('GET', '/api/financials/expense-report?cutoff=all', null, adminToken);
+    assert(adminReportAll.status === 200, 'INFORME CORTES: Super Admin obtiene informe histórico completo exitosamente (200 OK)');
+    assert(adminReportAll.data.summary && adminReportAll.data.summary.total_expenses > 0, 'INFORME CORTES: Totales consolidados de gastos computados');
+    assert(adminReportAll.data.summary.total_streamers_paid > 0, 'INFORME CORTES: Registra gastos liquidados en streamers');
+    assert(adminReportAll.data.summary.total_income > 0, 'INFORME CORTES: Registra ingresos por servidores');
+    assert(Array.isArray(adminReportAll.data.streamers), 'INFORME CORTES: Contiene lista detallada de gastos por cada streamer');
+    assert(Array.isArray(adminReportAll.data.servers), 'INFORME CORTES: Contiene lista detallada de gastos por cada servidor');
+    assert(Array.isArray(adminReportAll.data.pms), 'INFORME CORTES: Contiene lista detallada de pagos a Promoter Managers');
+    assert(Array.isArray(adminReportAll.data.audit_log), 'INFORME CORTES: Contiene auditoría cronológica de transacciones del corte');
+
+    // 18.3 Comprobar desglose exacto por Streamer
+    const dragonStreamer = adminReportAll.data.streamers.find(s => s.username === 'dragonslayer');
+    assert(dragonStreamer && dragonStreamer.total_spent > 0, 'GASTO STREAMER: Streamer dragonslayer refleja gastos totales liquidados');
+    assert(dragonStreamer && Array.isArray(dragonStreamer.servers) && dragonStreamer.servers.length > 0, 'GASTO STREAMER: Detalla los servidores donde participó el streamer');
+    assert(dragonStreamer && Array.isArray(dragonStreamer.payment_details), 'GASTO STREAMER: Incluye comprobantes y recibos individuales de pago');
+
+    // 18.4 Comprobar desglose exacto por Servidor
+    const multiServerExpense = adminReportAll.data.servers.find(s => s.server_id === multiServerId);
+    assert(multiServerExpense && multiServerExpense.streamers_expense === 200.00, 'GASTO SERVIDOR: Servidor Omniverse desglosa $200.00 USD en streamers');
+    assert(multiServerExpense && multiServerExpense.total_income === 3000.00, 'GASTO SERVIDOR: Servidor Omniverse desglosa $3,000.00 USD en ingresos');
+    assert(multiServerExpense && multiServerExpense.net_profit === 2800.00, 'GASTO SERVIDOR: Servidor Omniverse calcula ganancia neta exacta ($2,800.00 USD)');
+    assert(multiServerExpense && multiServerExpense.assigned_pms.length > 0, 'GASTO SERVIDOR: Servidor detalla PMs asignados a cargo');
+
+    // 18.5 Consulta de informe por Corte Quincenal (cutoff=q2_current)
+    const q2Report = await makeRequest('GET', '/api/financials/expense-report?cutoff=q2_current', null, adminToken);
+    assert(q2Report.status === 200, 'INFORME QUINCENAL: Consulta exitosa de 2ª Quincena del mes actual (200 OK)');
+    assert(q2Report.data.period && q2Report.data.period.cutoff === 'q2_current', 'INFORME QUINCENAL: Periodo identificado con etiqueta quincenal');
+    assert(q2Report.data.period.startDate && q2Report.data.period.endDate, 'INFORME QUINCENAL: Fechas automáticas del corte generadas (16 al fin de mes)');
+
+    // 18.6 Consulta de informe con Rango por Fechas Personalizado (cutoff=custom)
+    const customReport = await makeRequest('GET', '/api/financials/expense-report?cutoff=custom&startDate=2026-11-01&endDate=2026-11-30', null, adminToken);
+    assert(customReport.status === 200, 'INFORME POR FECHAS: Consulta exitosa con rango personalizado de fechas (200 OK)');
+    assert(customReport.data.period.startDate === '2026-11-01' && customReport.data.period.endDate === '2026-11-30', 'INFORME POR FECHAS: Fechas personalizadas aplicadas correctamente');
+    assert(customReport.data.summary.total_expenses > 0, 'INFORME POR FECHAS: Consolida gastos ocurridos en el rango de fechas');
+
+    // 18.7 Consulta filtrada por servidor específico
+    const filteredServerReport = await makeRequest('GET', `/api/financials/expense-report?cutoff=all&serverId=${multiServerId}`, null, adminToken);
+    assert(filteredServerReport.status === 200, 'FILTRO SERVIDOR: Consulta de gastos acotada a servidor específico (200 OK)');
+    assert(filteredServerReport.data.servers.length === 1 && filteredServerReport.data.servers[0].server_id === multiServerId, 'FILTRO SERVIDOR: Responde únicamente con el servidor filtrado');
+
+    // 19. CAMPAÑAS DIFERENCIADAS POR PM Y ASIGNACIÓN DE 1 O 2+ PMS A CARGO
+    console.log('\n--- 19. Campañas Diferenciadas por PM: Asignación de 1 o Múltiples PMs por Campaña ---');
+
+    // 19.1 Super Admin crea un tercer PM (Marcos) para tener 3 PMs en el servidor
+    const createPmMarcosRes = await makeRequest('POST', '/api/users', {
+      username: 'pm.marcos',
+      email: 'pm.marcos@pmforgex.com',
+      password: 'PMForgeX2026!Marcos',
+      full_name: 'Marcos PM',
+      role: 'pm',
+      phone: '+34699887766'
+    }, adminToken);
+    assert(createPmMarcosRes.status === 201, 'MULTI-PM: Super Admin crea 3er PM (Marcos) exitosamente (201 Created)');
+    const pmMarcosId = createPmMarcosRes.data.id;
+
+    // Login 2FA para Marcos
+    const marcosLogin = await doFullLogin('pm.marcos', 'PMForgeX2026!Marcos');
+    assert(marcosLogin.status === 200 && marcosLogin.data.token, 'AUTENTICACIÓN: Login y token JWT emitido para 3er PM Marcos');
+    const pmMarcosToken = marcosLogin.data.token;
+
+    // 19.2 Super Admin crea un Servidor con 3 PMs (Carlos: 5, Elena: 6, Marcos: pmMarcosId)
+    const server3PmsRes = await makeRequest('POST', '/api/servers', {
+      name: 'Metin2 Fortress Trio PMs',
+      game: 'Metin2',
+      budget: 6000.00,
+      pm_ids: [5, 6, pmMarcosId],
+      notes: 'Servidor con 3 PMs asignados que gestionan campañas independientes.'
+    }, adminToken);
+    assert(server3PmsRes.status === 201, 'SERVIDOR MULTI-PM: Creación de servidor con 3 PMs asignados oficialmente (201 Created)');
+    const fortressServerId = server3PmsRes.data.id;
+
+    // 19.3 Campaña 1: Asignada a 1 solo PM (Carlos id: 5)
+    const campCarlosRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Fortress - Campaña Exclusiva Carlos',
+      server_id: fortressServerId,
+      budget_internal: 1500.00,
+      pm_ids: [5],
+      objective: 'Campaña gestionada únicamente por Carlos'
+    }, adminToken);
+    assert(campCarlosRes.status === 201, 'CAMPAÑA 1 PM: Campaña creada con 1 solo PM asignado (Carlos)');
+    const campCarlosId = campCarlosRes.data.id;
+
+    // 19.4 Campaña 2: Asignada a 2 PMs en co-gestión (Elena id: 6 y Marcos: pmMarcosId)
+    const campDuoRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Fortress - Campaña Co-gestión Elena y Marcos',
+      server_id: fortressServerId,
+      budget_internal: 2000.00,
+      pm_ids: [6, pmMarcosId],
+      objective: 'Campaña co-gestionada por 2 PMs (Elena y Marcos)'
+    }, adminToken);
+    assert(campDuoRes.status === 201, 'CAMPAÑA 2 PMS: Campaña creada con 2 PMs a cargo (Elena y Marcos)');
+    const campDuoId = campDuoRes.data.id;
+
+    // 19.5 Comprobación de integridad de assigned_pms y pm_ids en GET /api/campaigns (Admin)
+    const adminCampaignsList = await makeRequest('GET', '/api/campaigns', null, adminToken);
+    const fetchedCampCarlos = adminCampaignsList.data.find(c => c.id === campCarlosId);
+    const fetchedCampDuo = adminCampaignsList.data.find(c => c.id === campDuoId);
+
+    assert(fetchedCampCarlos && fetchedCampCarlos.pm_ids.includes(5) && fetchedCampCarlos.assigned_pms.length === 1, 'INTEGRIDAD CAMPAÑA: Campaña 1 refleja 1 PM a cargo con sus datos');
+    assert(fetchedCampDuo && fetchedCampDuo.pm_ids.includes(6) && fetchedCampDuo.pm_ids.includes(pmMarcosId) && fetchedCampDuo.assigned_pms.length === 2, 'INTEGRIDAD CAMPAÑA: Campaña 2 refleja los 2 PMs asignados a cargo');
+
+    // 19.6 Aislamiento de Campañas: Carlos SOLO debe ver su campaña, NO la de Elena y Marcos
+    const carlosCampaigns = await makeRequest('GET', '/api/campaigns', null, pmToken);
+    const carlosCanSeeCamp1 = carlosCampaigns.data.some(c => c.id === campCarlosId);
+    const carlosCanSeeCamp2 = carlosCampaigns.data.some(c => c.id === campDuoId);
+    assert(carlosCanSeeCamp1, 'AISLAMIENTO PM: PM Carlos ve su campaña asignada (Campaña 1)');
+    assert(!carlosCanSeeCamp2, 'AISLAMIENTO PM: PM Carlos NO ve la campaña de Elena y Marcos en el mismo servidor');
+
+    // 19.7 Aislamiento de Campañas: Elena y Marcos ven Campaña 2, pero NO la de Carlos
+    const elenaCampaigns = await makeRequest('GET', '/api/campaigns', null, pmElenaToken);
+    const elenaCanSeeCamp1 = elenaCampaigns.data.some(c => c.id === campCarlosId);
+    const elenaCanSeeCamp2 = elenaCampaigns.data.some(c => c.id === campDuoId);
+    assert(!elenaCanSeeCamp1, 'AISLAMIENTO PM: PM Elena NO ve la campaña exclusiva de Carlos');
+    assert(elenaCanSeeCamp2, 'AISLAMIENTO PM: PM Elena ve la campaña co-asignada a ella y a Marcos');
+
+    const marcosCampaigns = await makeRequest('GET', '/api/campaigns', null, pmMarcosToken);
+    const marcosCanSeeCamp1 = marcosCampaigns.data.some(c => c.id === campCarlosId);
+    const marcosCanSeeCamp2 = marcosCampaigns.data.some(c => c.id === campDuoId);
+    assert(!marcosCanSeeCamp1, 'AISLAMIENTO PM: PM Marcos NO ve la campaña exclusiva de Carlos');
+    assert(marcosCanSeeCamp2, 'AISLAMIENTO PM: PM Marcos ve la campaña co-asignada');
+
+    // 19.8 Seguridad y RBAC: PM Carlos intenta editar la campaña de Elena y Marcos -> 403 Forbidden
+    const unauthEditCamp = await makeRequest('PUT', `/api/campaigns/${campDuoId}`, {
+      objective: 'Intento malicioso de modificar campaña ajena'
+    }, pmToken);
+    assert(unauthEditCamp.status === 403, 'SEGURIDAD CAMPAÑAS: PM Carlos rechazado con 403 al intentar editar campaña donde no está a cargo');
+
+    // 19.9 Autorización co-PM: PM Elena y PM Marcos sí pueden editar su campaña compartida
+    const authEditCamp = await makeRequest('PUT', `/api/campaigns/${campDuoId}`, {
+      objective: 'Actualización coordinada por Elena'
+    }, pmElenaToken);
+    assert(authEditCamp.status === 200, 'AUTORIZACIÓN CO-PM: PM asignada a cargo (Elena) modifica la campaña exitosamente (200 OK)');
+
+    // 19.10 Flujo de Evidencias y Aislamiento de Revisión entre PMs:
+    // Vinculamos streamer a Campaña 2 y enviamos evidencia
+    await makeRequest('POST', `/api/campaigns/${campDuoId}/creators`, {
+      creator_id: 7,
+      agreement_terms: 'Directo dúo'
+    }, adminToken);
+
+    const duoEvRes = await makeRequest('POST', '/api/evidences', {
+      campaign_id: campDuoId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/fortress-duo',
+      activity_date: '2026-11-20',
+      duration_minutes: 90,
+      total_views: 1200
+    }, creatorToken);
+    assert(duoEvRes.status === 201, 'EVIDENCIA: Streamer envía actividad para campaña con 2 PMs (201 Created)');
+    const duoEvId = duoEvRes.data.id;
+
+    // PM Carlos NO está a cargo de esta campaña -> Intento de revisión denegado con 403
+    const carlosReviewAttempt = await makeRequest('PUT', `/api/evidences/${duoEvId}/review`, {
+      status: 'approved',
+      internal_notes: 'Carlos no debería poder revisar esto'
+    }, pmToken);
+    assert(carlosReviewAttempt.status === 403, 'SEGURIDAD EVIDENCIAS: PM no asignado a la campaña es rechazado con 403 al intentar revisar su evidencia');
+
+    // PM Marcos (uno de los 2 PMs asignados) revisa y aprueba exitosamente
+    const marcosReviewSuccess = await makeRequest('PUT', `/api/evidences/${duoEvId}/review`, {
+      status: 'approved',
+      internal_notes: 'Aprobado oficialmente por PM Marcos'
+    }, pmMarcosToken);
+    assert(marcosReviewSuccess.status === 200, 'AUTORIZACIÓN CO-PM EVIDENCIA: Co-PM asignado (Marcos) aprueba la entrega exitosamente (200 OK)');
+
+    // 19.11 Reasignación / Adición de PM a Campaña: Super Admin suma a Carlos como 3er co-PM
+    const reassignCampRes = await makeRequest('PUT', `/api/campaigns/${campDuoId}`, {
+      pm_ids: [6, pmMarcosId, 5]
+    }, adminToken);
+    assert(reassignCampRes.status === 200, 'REASIGNACIÓN PMS: Super Admin actualiza la campaña sumando a Carlos como co-PM');
+
+    // Ahora Carlos SÍ puede ver la Campaña 2
+    const carlosCampaignsAfter = await makeRequest('GET', '/api/campaigns', null, pmToken);
+    const carlosCanSeeCamp2Now = carlosCampaignsAfter.data.some(c => c.id === campDuoId);
+    assert(carlosCanSeeCamp2Now, 'PERSISTENCIA MULTI-PM: PM Carlos ahora tiene acceso completo tras ser incorporado a la campaña');
+
+    // 20. MULTIPLICADOR DE DIRECTOS POR STREAMER Y SEGUIMIENTO DE AVANCE INDIVIDUAL
+    console.log('\n--- 20. Multiplicador de Directos por Streamer y Avance Individual de Entregas ---');
+
+    // 20.1 Login con segunda streamer (Valquiria)
+    const valquiriaLogin = await doFullLogin('valquiria', 'PMForgeX2026!Creator');
+    assert(valquiriaLogin.status === 200 && valquiriaLogin.data.user.id === 8, 'LOGIN STREAMER 2: Valquiria inicia sesión con 2FA exitosamente');
+    const valquiriaToken = valquiriaLogin.data.token;
+
+    // 20.2 Crear Campaña con cuota de 3 directos por streamer y asignar a 2 streamers (DragonSlayer: 7 y Valquiria: 8)
+    const multiStreamerCampRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Torneo Dúos - 3 Directos por Streamer',
+      server_id: multiServerId,
+      budget_internal: 800.00,
+      target_evidences: 3,
+      target_hours: 10.0,
+      objective: 'Cada streamer debe completar 3 directos de torneo',
+      creator_ids: [7, 8],
+      pm_ids: [5]
+    }, adminToken);
+    assert(multiStreamerCampRes.status === 201, 'CREACIÓN CAMPAÑA MULTI-STREAMER: Super Admin crea campaña con 3 directos/streamer y 2 streamers');
+    const multiStreamerCampId = multiStreamerCampRes.data.id;
+
+    // 20.3 Consultar campaña y verificar cálculo de multiplicador de directos totales (3 directos × 2 streamers = 6)
+    const campDetailsRes = await makeRequest('GET', '/api/campaigns', null, adminToken);
+    const createdCamp = campDetailsRes.data.find(c => c.id === multiStreamerCampId);
+    assert(createdCamp, 'CONSULTA CAMPAÑA: Campaña encontrada en listado de campañas');
+    assert(createdCamp.target_evidences_per_creator === 3, 'OBJETIVO INDIVIDUAL: target_evidences_per_creator es exactamente 3');
+    assert(createdCamp.total_target_evidences === 6, 'MULTIPLICADOR DIRECTOS TOTALES: total_target_evidences es 6 (3 directos × 2 streamers)');
+    assert(Array.isArray(createdCamp.creators) && createdCamp.creators.length === 2, 'STREAMERS ASIGNADOS: 2 streamers presentes en la campaña');
+
+    // Verificar métricas individuales iniciales de cada streamer
+    const dSlayerInitial = createdCamp.creators.find(c => c.creator_user_id === 7);
+    const valqInitial = createdCamp.creators.find(c => c.creator_user_id === 8);
+    assert(dSlayerInitial && dSlayerInitial.approved_evidences === 0 && dSlayerInitial.status_label === 'Sin Entregas', 'AVANCE INDIVIDUAL INICIAL: DragonSlayer inicia con 0 directos y estado "Sin Entregas"');
+    assert(valqInitial && valqInitial.approved_evidences === 0 && valqInitial.status_label === 'Sin Entregas', 'AVANCE INDIVIDUAL INICIAL: Valquiria inicia con 0 directos y estado "Sin Entregas"');
+
+    // 20.4 Streamer 1 (DragonSlayer) realiza sus 3 directos
+    for (let i = 1; i <= 3; i++) {
+      const evRes = await makeRequest('POST', '/api/evidences', {
+        campaign_id: multiStreamerCampId,
+        type: 'stream',
+        platform: 'Twitch',
+        content_url: `https://twitch.tv/dragonslayer/torneo-duo-${i}`,
+        activity_date: '2026-11-21',
+        duration_minutes: 90,
+        total_views: 1000 + i * 100
+      }, creatorToken);
+      assert(evRes.status === 201, `ENTREGA STREAMER 1: DragonSlayer envía entrega ${i} de 3`);
+
+      // PM aprueba la entrega
+      const reviewRes = await makeRequest('PUT', `/api/evidences/${evRes.data.id}/review`, {
+        status: 'approved',
+        internal_notes: `Directo ${i} aprobado`
+      }, pmToken);
+      assert(reviewRes.status === 200, `REVISIÓN PM: Entrega ${i} de DragonSlayer aprobada`);
+    }
+
+    // 20.5 Verificar avance individual tras 3 directos de DragonSlayer
+    const campAfterSlayer = (await makeRequest('GET', '/api/campaigns', null, adminToken)).data.find(c => c.id === multiStreamerCampId);
+    const dSlayerProgress = campAfterSlayer.creators.find(c => c.creator_user_id === 7);
+    assert(dSlayerProgress.approved_evidences === 3, 'AVANCE INDIVIDUAL STREAMER 1: Registra 3 directos aprobados');
+    assert(dSlayerProgress.progress_percentage === 100, 'AVANCE INDIVIDUAL STREAMER 1: Progreso alcanza el 100%');
+    assert(dSlayerProgress.is_completed === true && dSlayerProgress.status_label === 'Completado', 'ESTADO INDIVIDUAL STREAMER 1: Marcado como completado');
+
+    // 20.6 Restricción Individual: DragonSlayer intenta entregar un 4º directo (supera su cupo de 3 directos) -> 400 Bad Request
+    const slayerOverLimitRes = await makeRequest('POST', '/api/evidences', {
+      campaign_id: multiStreamerCampId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/torneo-duo-extra',
+      activity_date: '2026-11-21',
+      duration_minutes: 60,
+      total_views: 500
+    }, creatorToken);
+    assert(slayerOverLimitRes.status === 400, 'RESTRICCIÓN INDIVIDUAL CUOTA: Intento de 4º directo de DragonSlayer es rechazado con 400 Bad Request');
+    assert(slayerOverLimitRes.data.error.includes('Se ha alcanzado el límite máximo de 3'), 'MENSAJE RESTRICCIÓN INDIVIDUAL: Error indica límite de 3 directos alcanzado');
+
+    // 20.7 Streamer 2 (Valquiria) entrega 1 directo -> Debe permitirse ya que su cuota individual está libre (0/3)
+    const valqEv1Res = await makeRequest('POST', '/api/evidences', {
+      campaign_id: multiStreamerCampId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/valquiria/torneo-duo-1',
+      activity_date: '2026-11-21',
+      duration_minutes: 120,
+      total_views: 1400
+    }, valquiriaToken);
+    assert(valqEv1Res.status === 201, 'ENTREGA STREAMER 2: Valquiria entrega directo 1 exitosamente (no es bloqueada por las entregas del streamer 1)');
+
+    // PM aprueba entrega de Valquiria
+    await makeRequest('PUT', `/api/evidences/${valqEv1Res.data.id}/review`, {
+      status: 'approved',
+      internal_notes: 'Directo 1 Valquiria aprobado'
+    }, pmToken);
+
+    // 20.8 Verificar métricas finales consolidadas de la campaña y avance individual
+    const finalCampRes = (await makeRequest('GET', '/api/campaigns', null, adminToken)).data.find(c => c.id === multiStreamerCampId);
+    assert(finalCampRes.total_target_evidences === 6, 'CONSOLIDADO CAMPAÑA: Objetivo total se mantiene en 6 directos');
+    assert(finalCampRes.approved_evidences_count === 4, 'CONSOLIDADO CAMPAÑA: 4 directos aprobados en total (3 DragonSlayer + 1 Valquiria)');
+    assert(finalCampRes.evidences_progress_percentage === 67, 'CONSOLIDADO CAMPAÑA: 67% de avance global en la campaña');
+
+    const valqFinal = finalCampRes.creators.find(c => c.creator_user_id === 8);
+    assert(valqFinal.approved_evidences === 1 && valqFinal.target_evidences === 3, 'AVANCE INDIVIDUAL STREAMER 2: Valquiria registra 1/3 directos');
+    assert(valqFinal.progress_percentage === 33 && valqFinal.status_label === 'En Progreso', 'ESTADO INDIVIDUAL STREAMER 2: Valquiria en progreso con 33%');
+
+    // 21. GESTIÓN Y RECALCULO DE FINANZAS: EDICIÓN Y ELIMINACIÓN DE PAGOS, Y BORRADO EN CASCADA
+    console.log('\n--- 21. Gestión de Finanzas: Edición/Eliminación de Pagos y Borrado de Entregas, Campañas y Servidores ---');
+
+    // 21.1 Liquidar pago de una evidencia aprobada
+    const evToPayId = valqEv1Res.data.id;
+    const initialPayRes = await makeRequest('POST', `/api/evidences/${evToPayId}/pay`, {
+      payout_amount: 150.00,
+      payment_reference: 'TRX-QA-INITIAL',
+      payment_notes: 'Pago inicial directo Valquiria'
+    }, adminToken);
+    assert(initialPayRes.status === 200, 'PAGO INICIAL: Liquidación de entrega realizada (200 OK)');
+
+    // Verificar que el gasto se computa en el servidor
+    const finBeforeEdit = (await makeRequest('GET', `/api/financials/servers?server_id=${multiServerId}`, null, adminToken)).data.servers[0];
+    const streamerExpBefore = finBeforeEdit.financials.total_streamers_expense;
+
+    // 21.2 EDITAR PAGO DE ENTREGA (PUT /api/evidences/:id/pay)
+    const editPayRes = await makeRequest('PUT', `/api/evidences/${evToPayId}/pay`, {
+      payout_amount: 220.00,
+      payment_reference: 'TRX-QA-EDITED',
+      payment_notes: 'Pago corregido con bono extra'
+    }, adminToken);
+    assert(editPayRes.status === 200, 'EDICIÓN PAGO: Pago de entrega modificado exitosamente a $220.00 USD (200 OK)');
+    assert(editPayRes.data.payout_amount === 220.00, 'DATOS PAGO: Monto actualizado reflejado en respuesta');
+
+    // Verificar que el gasto del servidor aumentó en $70 ($220 - $150)
+    const finAfterEdit = (await makeRequest('GET', `/api/financials/servers?server_id=${multiServerId}`, null, adminToken)).data.servers[0];
+    assert(finAfterEdit.financials.total_streamers_expense === streamerExpBefore + 70.00, 'RECÁLCULO GASTO SERVIDOR: El gasto del servidor se actualiza automáticamente con el nuevo monto');
+
+    // 21.3 ANULAR / ELIMINAR PAGO DE ENTREGA (DELETE /api/evidences/:id/pay)
+    const revertPayRes = await makeRequest('DELETE', `/api/evidences/${evToPayId}/pay`, null, adminToken);
+    assert(revertPayRes.status === 200, 'ANULACIÓN PAGO: Pago de entrega anulado/eliminado correctamente (200 OK)');
+
+    // Verificar que la entrega vuelve a estado 'approved' y payout_amount es null
+    const evidencesListAfterRevert = (await makeRequest('GET', '/api/evidences', null, adminToken)).data;
+    const revertedEv = evidencesListAfterRevert.find(e => e.id === evToPayId);
+    assert(revertedEv && revertedEv.status === 'approved' && !revertedEv.payout_amount, 'ESTADO REVERTIDO: Entrega vuelve a "approved" y no registra payout');
+
+    // Verificar que el gasto del servidor disminuyó en los $220 anulados
+    const finAfterRevert = (await makeRequest('GET', `/api/financials/servers?server_id=${multiServerId}`, null, adminToken)).data.servers[0];
+    assert(finAfterRevert.financials.total_streamers_expense === streamerExpBefore - 150.00, 'DESCUENTO AUTOMÁTICO: El gasto en streamers se redujo exactamente al anular el pago');
+
+    // 21.4 EDICIÓN DE TRANSACCIÓN FINANCIERA (PUT /api/financials/transactions/:id)
+    const createTxRes = await makeRequest('POST', '/api/financials/transactions', {
+      server_id: multiServerId,
+      type: 'expense_pm',
+      category: 'pm_fee',
+      concept: 'Honorario mensual PM Test',
+      amount: 400.00,
+      transaction_date: '2026-11-22',
+      payment_method: 'Transferencia'
+    }, adminToken);
+    assert(createTxRes.status === 201, 'CREAR TRANSACCIÓN: Registro financiero de prueba creado (201 Created)');
+    const txId = createTxRes.data.id;
+
+    const editTxRes = await makeRequest('PUT', `/api/financials/transactions/${txId}`, {
+      amount: 480.00,
+      concept: 'Honorario mensual PM Test (Actualizado)',
+      transaction_date: '2026-11-22',
+      payment_method: 'Transferencia'
+    }, adminToken);
+    assert(editTxRes.status === 200, 'EDICIÓN TRANSACCIÓN: Transacción financiera editada a $480.00 USD (200 OK)');
+
+    // 21.5 ELIMINACIÓN DE TRANSACCIÓN FINANCIERA (DELETE /api/financials/transactions/:id)
+    const deleteTxRes = await makeRequest('DELETE', `/api/financials/transactions/${txId}`, null, adminToken);
+    assert(deleteTxRes.status === 200, 'ELIMINAR TRANSACCIÓN: Transacción financiera anulada y eliminada correctamente (200 OK)');
+
+    // 21.6 ELIMINACIÓN DE ENTREGA (DELETE /api/evidences/:id) Y RECÁLCULO AUTOMÁTICO
+    const deleteEvRes = await makeRequest('DELETE', `/api/evidences/${evToPayId}`, null, adminToken);
+    assert(deleteEvRes.status === 200, 'ELIMINAR ENTREGA: Entrega eliminada definitivamente del sistema (200 OK)');
+
+    const evidencesAfterDelete = (await makeRequest('GET', '/api/evidences', null, adminToken)).data;
+    assert(!evidencesAfterDelete.some(e => e.id === evToPayId), 'INTEGRIDAD ENTREGA: La entrega ya no existe en el catálogo');
+
+    // 21.7 BORRADO DE CAMPAÑA Y EXCLUSIÓN AUTOMÁTICA DE GASTOS
+    const deleteCampRes = await makeRequest('DELETE', `/api/campaigns/${multiStreamerCampId}`, null, adminToken);
+    assert(deleteCampRes.status === 200, 'ELIMINAR CAMPAÑA: Campaña eliminada mediante soft delete');
+
+    // Verificar que la campaña eliminada no suma en presupuestos activos ni en gastos del servidor
+    const finAfterCampDelete = (await makeRequest('GET', `/api/financials/servers?server_id=${multiServerId}`, null, adminToken)).data.servers[0];
+    const campInActivePnl = finAfterCampDelete.breakdown.campaigns_pnl.some(c => c.campaign_id === multiStreamerCampId);
+    assert(!campInActivePnl, 'EXCLUSIÓN CAMPAÑA BORRADA: La campaña eliminada fue excluida del balance P&L activo del servidor');
+
+    // 21.8 BORRADO DE SERVIDOR Y SINCRONIZACIÓN EN CASCADA
+    const deleteServerRes = await makeRequest('DELETE', `/api/servers/${multiServerId}`, null, adminToken);
+    assert(deleteServerRes.status === 200, 'ELIMINAR SERVIDOR: Servidor eliminado por Super Admin (200 OK)');
+
+    // Verificar que el servidor eliminado ya no aparece en el balance activo de servidores
+    const allFinServers = (await makeRequest('GET', '/api/financials/servers', null, adminToken)).data.servers;
+    assert(!allFinServers.some(s => s.server_id === multiServerId), 'EXCLUSIÓN SERVIDOR BORRADO: El servidor eliminado no contamina los balances activos');
+
+    // 22. DESCUENTO AUTOMÁTICO DE PRESUPUESTO, LIQUIDACIÓN PM AL FINALIZAR Y GANANCIA POR PRESUPUESTO NO USADO
+    console.log('\n--- 22. Descuento Automático de Presupuesto, Liquidación de PM al Concluir y Ganancia por Presupuesto No Usado ---');
+
+    // 22.1 Crear servidor con presupuesto de $3000 USD
+    const srvAutoBudgetRes = await makeRequest('POST', '/api/servers', {
+      name: 'Chronicles of Metin (Presupuesto QA)',
+      game: 'Metin2',
+      budget: 3000.00,
+      pm_user_id: 2, // PM Carlos
+      owner_user_id: 6
+    }, adminToken);
+    assert(srvAutoBudgetRes.status === 201, 'CREAR SERVIDOR: Servidor creado con presupuesto de $3,000 USD (201 Created)');
+    const autoServerId = srvAutoBudgetRes.data.id;
+
+    // 22.2 Crear campaña con presupuesto de $1,200 USD y honorario de PM de $200 USD
+    const campAutoRes = await makeRequest('POST', '/api/campaigns', {
+      name: 'Campaña Lanzamiento Alfa',
+      server_id: autoServerId,
+      budget_internal: 1200.00,
+      pm_fee: 200.00,
+      target_evidences: 2,
+      creator_ids: [7], // DragonSlayer
+      pm_ids: [2],
+      status: 'active'
+    }, adminToken);
+    assert(campAutoRes.status === 201, 'CREAR CAMPAÑA: Campaña creada con presupuesto $1,200 y honorario PM $200');
+    const autoCampId = campAutoRes.data.id;
+
+    // 22.3 Verificar que el presupuesto del servidor se descuenta automáticamente para nuevas campañas
+    const finSrv1 = (await makeRequest('GET', `/api/financials/servers?server_id=${autoServerId}`, null, adminToken)).data.servers[0];
+    assert(finSrv1.campaigns_summary.total_budget === 1200.00, 'PRESUPUESTO ASIGNADO: $1,200 USD asignados a la campaña');
+    assert(finSrv1.campaigns_summary.remaining_budget_for_campaigns === 1800.00, 'DESCUENTO EN SERVIDOR: Presupuesto restante libre del servidor es exactamente $1,800 USD ($3,000 - $1,200)');
+
+    // 22.4 Streamer realiza entregas y se liquidan ($250 + $250 = $500)
+    const d1Res = await makeRequest('POST', '/api/evidences', {
+      campaign_id: autoCampId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/v/qa-delivery-1',
+      activity_date: '2026-11-22',
+      duration_minutes: 120
+    }, creatorToken);
+    assert(d1Res.status === 201, 'ENTREGA 1: Streamer registra primer directo');
+
+    await makeRequest('PUT', `/api/evidences/${d1Res.data.id}/review`, { status: 'approved' }, pmToken);
+    await makeRequest('POST', `/api/evidences/${d1Res.data.id}/pay`, {
+      payout_amount: 250.00,
+      payment_reference: 'TRX-QA-D1',
+      payment_notes: 'Liquidación directa 1'
+    }, adminToken);
+
+    const d2Res = await makeRequest('POST', '/api/evidences', {
+      campaign_id: autoCampId,
+      type: 'stream',
+      platform: 'Twitch',
+      content_url: 'https://twitch.tv/dragonslayer/v/qa-delivery-2',
+      activity_date: '2026-11-23',
+      duration_minutes: 120
+    }, creatorToken);
+    assert(d2Res.status === 201, 'ENTREGA 2: Streamer registra segundo directo');
+
+    await makeRequest('PUT', `/api/evidences/${d2Res.data.id}/review`, { status: 'approved' }, pmToken);
+    await makeRequest('POST', `/api/evidences/${d2Res.data.id}/pay`, {
+      payout_amount: 250.00,
+      payment_reference: 'TRX-QA-D2',
+      payment_notes: 'Liquidación directa 2'
+    }, adminToken);
+
+    // 22.5 Verificar recálculo dinámico a medida que se entregan directos (en campaña activa)
+    const campActiveList = (await makeRequest('GET', '/api/campaigns', null, adminToken)).data;
+    const campActive = campActiveList.find(c => c.id === autoCampId);
+    assert(campActive.financials.paid_streamers_expense === 500.00, 'DESCUENTO EN CAMPAÑA: $500 USD descontados automáticamente por directos entregados');
+    assert(campActive.financials.unused_budget === 700.00, 'PRESUPUESTO NO USADO ACTUAL: $700 USD libres ($1,200 - $500)');
+    assert(campActive.financials.projected_net_profit === 500.00, 'PROYECCIÓN FINAL: $500 USD netos proyectados contemplando el honorario del PM ($200)');
+
+    // 22.6 Finalizar la campaña: el pago del PM se descuenta automáticamente del presupuesto final
+    const completeCampRes = await makeRequest('PUT', `/api/campaigns/${autoCampId}`, {
+      status: 'completed'
+    }, adminToken);
+    assert(completeCampRes.status === 200, 'FINALIZAR CAMPAÑA: Campaña concluida exitosamente (200 OK)');
+
+    // 22.7 Verificar que el honorario del PM se liquidó automáticamente en transacciones financieras
+    const srvReportRes = (await makeRequest('GET', `/api/financials/servers?server_id=${autoServerId}`, null, adminToken)).data.servers[0];
+    const pmTx = srvReportRes.breakdown.pm_expenses.find(t => t.concept.includes('Honorario Cierre Campaña: Campaña Lanzamiento Alfa'));
+    assert(pmTx && pmTx.amount === 200.00, 'LIQUIDACIÓN AUTOMÁTICA PM: Honorario de $200 USD generado para el PM de la campaña');
+
+    // 22.8 Verificar que el total no usado del presupuesto se refleja exactamente como ganancia total
+    const campCompletedList = (await makeRequest('GET', '/api/campaigns', null, adminToken)).data;
+    const campCompleted = campCompletedList.find(c => c.id === autoCampId);
+    assert(campCompleted.financials.paid_streamers_expense === 500.00, 'GASTO FINAL STREAMERS: $500 USD liquidados');
+    assert(campCompleted.financials.paid_pm_expense === 200.00, 'GASTO FINAL PM: $200 USD liquidados por fin de campaña');
+    assert(campCompleted.financials.total_spent === 700.00, 'TOTAL CONSUMIDO: $700 USD consumidos del presupuesto');
+    assert(campCompleted.financials.unused_budget === 500.00, 'PRESUPUESTO NO USADO: $500 USD de remanente no utilizado');
+    assert(campCompleted.financials.net_profit === 500.00, 'GANANCIA TOTAL REFLEJADA: La ganancia total es exactamente el presupuesto no usado ($500 USD)');
+    assert(campCompleted.financials.profit_margin_percentage === 41.7, 'MARGEN FINAL: 41.7% de margen neto de ganancia');
+
+    // 22.9 Verificar balance del servidor consolidado
+    const finSrvFinal = (await makeRequest('GET', `/api/financials/servers?server_id=${autoServerId}`, null, adminToken)).data.servers[0];
+    assert(finSrvFinal.campaigns_summary.total_spent === 700.00, 'BALANCE SERVIDOR: $700 USD consumidos en total en campañas');
+    assert(finSrvFinal.campaigns_summary.unused_budget === 500.00, 'BALANCE SERVIDOR: $500 USD de presupuesto de campaña no utilizado');
+    assert(finSrvFinal.campaigns_summary.total_net_profit === 500.00, 'BALANCE SERVIDOR: $500 USD de ganancia total neta generada');
+
+    // 22.10 Verificar cálculo de eficiencia sobre presupuesto en el informe de cortes
+    const cutoffSrvRes = (await makeRequest('GET', `/api/financials/cutoff-report?server_id=${autoServerId}`, null, adminToken)).data;
+    const srvCutoffData = cutoffSrvRes.servers.find(s => s.server_id === autoServerId);
+    assert(srvCutoffData, 'INFORME DE CORTES: Servidor listado en el reporte');
+    assert(srvCutoffData.is_profitable === true, 'ESTADO EFICIENCIA: El servidor es rentable y eficiente al operar por debajo del presupuesto');
+    assert(srvCutoffData.status_label === 'EFICIENTE', 'ETIQUETA EFICIENTE: El estado del servidor es EFICIENTE (no DÉFICIT)');
+    assert(srvCutoffData.net_profit === 2300.00, 'REMANENTE NETO CALCULADO: Ganancia / remanente neto de $2,300.00 USD ($3,000 presupuesto - $700 gastos)');
+    assert(srvCutoffData.profit_margin_percentage === 76.7, 'MARGEN DE EFICIENCIA: 76.7% de eficiencia sobre el presupuesto');
+
+    console.log('\n--- 23. Módulo de Pagos a PMs: Estado de Campañas, Servidores y Liquidaciones Directas ---');
+    
+    // 23.1 RBAC: Creador tiene prohibido acceder a /api/financials/pms-summary
+    const creatorPmSummaryRes = await makeRequest('GET', '/api/financials/pms-summary', null, creatorToken);
+    assert(creatorPmSummaryRes.status === 403, 'RBAC: Creador tiene prohibido acceder al resumen de pagos a PMs (403)');
+
+    // 23.2 Consulta de resumen consolidado de PMs por Super Admin
+    const pmsSummaryRes = await makeRequest('GET', '/api/financials/pms-summary', null, adminToken);
+    assert(pmsSummaryRes.status === 200, 'GET /api/financials/pms-summary responde 200 OK');
+    assert(pmsSummaryRes.data.summary && pmsSummaryRes.data.pms, 'ESTRUCTURA PMs: Retorna objeto con summary global y lista de pms');
+    assert(Array.isArray(pmsSummaryRes.data.pms) && pmsSummaryRes.data.pms.length > 0, 'LISTA PMs: Retorna al menos 1 PM activo');
+
+    const targetPmData = pmsSummaryRes.data.pms.find(p => p.username === 'pm.carlos') || pmsSummaryRes.data.pms[0];
+    assert(targetPmData, 'PM IDENTIFICADO: Promoter Manager encontrado en el listado');
+    assert(Array.isArray(targetPmData.servers), 'SERVIDORES PM: Lista de servidores asignados al PM disponible');
+    assert(Array.isArray(targetPmData.campaigns), 'CAMPAÑAS PM: Lista de campañas asignadas al PM disponible');
+    assert(Array.isArray(targetPmData.payments), 'PAGOS PM: Historial de transacciones del PM disponible');
+    assert(targetPmData.metrics.status_label, 'ESTADO PM: Etiqueta de estado financiero asignada (AL DÍA / PENDIENTE)');
+
+    // Si tiene servidores asignados, verificar campos requeridos
+    if (targetPmData.servers.length > 0) {
+      const srv0 = targetPmData.servers[0];
+      assert(srv0.id && srv0.name && srv0.status, 'DETALLE SERVIDOR: Contiene ID, nombre y estado del servidor');
+      assert(typeof srv0.budget === 'number' && typeof srv0.budget_remaining === 'number', 'PRESUPUESTO SERVIDOR: Valores numéricos de presupuesto y remanente');
+    }
+
+    // 23.3 Validación de campos obligatorios en POST /api/financials/pm-payout
+    const invalidPayoutRes = await makeRequest('POST', '/api/financials/pm-payout', {
+      pm_id: targetPmData.pm_id,
+      amount: -50
+    }, adminToken);
+    assert(invalidPayoutRes.status === 400, 'VALIDACIÓN PAGO PM: Rechaza pago sin servidor o con monto negativo (400)');
+
+    // 23.4 Ejecutar liquidación directa de honorario a PM
+    const targetCamp = targetPmData.campaigns.length > 0 ? targetPmData.campaigns[0] : null;
+    const targetServerIdForPay = targetCamp ? targetCamp.server_id : (targetPmData.servers.length > 0 ? targetPmData.servers[0].id : autoServerId);
+    const initialPaidTotal = targetPmData.metrics.total_paid;
+    
+    const payoutPayload = {
+      pm_id: targetPmData.pm_id,
+      server_id: targetServerIdForPay,
+      campaign_id: targetCamp ? targetCamp.id : null,
+      amount: 150.00,
+      concept: 'Liquidación de Honorario por Supervisión de Servidor QA',
+      payment_method: 'Transferencia',
+      payment_reference: 'TRANS-PM-TEST-9988',
+      transaction_date: new Date().toISOString().split('T')[0],
+      notes: 'Pago de prueba unitaria QA verificado'
+    };
+
+    const payoutExecRes = await makeRequest('POST', '/api/financials/pm-payout', payoutPayload, adminToken);
+    assert(payoutExecRes.status === 201, 'REGISTRAR PAGO A PM: Pago procesado exitosamente (201 Created)');
+    assert(payoutExecRes.data.transaction_id, 'TRANSACCIÓN CREADA: Retorna ID de transacción financiera generada');
+    assert(payoutExecRes.data.transaction.amount === 150.00, 'MONTO REGISTRADO: Monto de $150.00 USD registrado correctamente');
+
+    // 23.5 Verificar actualización inmediata en el resumen del PM
+    const updatedSummaryRes = await makeRequest('GET', `/api/financials/pms-summary?pm_id=${targetPmData.pm_id}`, null, adminToken);
+    const updatedPmData = updatedSummaryRes.data.pms[0];
+    assert(updatedPmData.metrics.total_paid === initialPaidTotal + 150.00, 'ACTUALIZACIÓN PAGOS: Métrica de total_paid del PM incrementada exactamente en $150.00 USD');
+    
+    const foundPaymentTx = updatedPmData.payments.find(p => p.id === payoutExecRes.data.transaction_id);
+    assert(foundPaymentTx, 'HISTORIAL PAGOS: Transacción aparece inmediatamente en el historial del PM');
+    assert(foundPaymentTx.payment_reference === 'TRANS-PM-TEST-9988', 'REFERENCIA PAGO: Código de referencia registrado correctamente');
+
+    // 23.6 Limpieza de la transacción de prueba para mantener balances
+    const deletePmPayTxRes = await makeRequest('DELETE', `/api/financials/transactions/${payoutExecRes.data.transaction_id}`, null, adminToken);
+    assert(deletePmPayTxRes.status === 200, 'ANULAR PAGO: Transacción de prueba anulada y eliminada correctamente');
+
   } catch (err) {
     console.error('Error durante ejecución de pruebas:', err);
     failed++;

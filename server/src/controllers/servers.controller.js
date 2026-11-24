@@ -6,7 +6,7 @@ function getServers(req, res) {
 
   let query = `
     SELECT 
-      s.id, s.name, s.game, s.status, s.contact_info, s.logo_url, s.website_url, s.notes, s.created_at,
+      s.id, s.name, s.game, s.status, s.contact_info, s.budget, s.logo_url, s.website_url, s.notes, s.created_at,
       s.owner_user_id,
       owner.full_name as owner_name, owner.email as owner_email,
       s.pm_user_id,
@@ -22,8 +22,8 @@ function getServers(req, res) {
 
   // Role scoping:
   if (role === 'pm') {
-    query += ' AND s.pm_user_id = ?';
-    params.push(userId);
+    query += ' AND (s.pm_user_id = ? OR EXISTS (SELECT 1 FROM server_pms sp WHERE sp.server_id = s.id AND sp.pm_id = ? AND sp.status = \'active\'))';
+    params.push(userId, userId);
   } else if (role === 'server_owner') {
     query += ' AND s.owner_user_id = ?';
     params.push(userId);
@@ -33,7 +33,7 @@ function getServers(req, res) {
 
   const servers = db.prepare(query).all(...params);
 
-  // Attach creator details for each server
+  // Attach creator and PM details for each server
   const enriched = servers.map(server => {
     const creators = db.prepare(`
       SELECT 
@@ -46,8 +46,32 @@ function getServers(req, res) {
       WHERE sc.server_id = ? AND sc.status = 'active' AND u.deleted_at IS NULL
     `).all(server.id);
 
+    const assignedPms = db.prepare(`
+      SELECT 
+        u.id as pm_id,
+        u.full_name as pm_name,
+        u.username as pm_username,
+        u.email as pm_email,
+        sp.assigned_at
+      FROM server_pms sp
+      JOIN users u ON sp.pm_id = u.id
+      WHERE sp.server_id = ? AND sp.status = 'active' AND u.deleted_at IS NULL
+      ORDER BY sp.id ASC
+    `).all(server.id);
+
+    // Fallback: If assignedPms is empty but server has a pm_user_id, add it
+    if (assignedPms.length === 0 && server.pm_user_id && server.pm_name) {
+      assignedPms.push({
+        pm_id: server.pm_user_id,
+        pm_name: server.pm_name,
+        pm_email: server.pm_email
+      });
+    }
+
     return {
       ...server,
+      budget: parseFloat(server.budget) || 0,
+      assigned_pms: assignedPms,
       creators: creators.map(c => {
         let platforms = [];
         try { platforms = JSON.parse(c.platforms || '[]'); } catch (e) {}
@@ -60,22 +84,48 @@ function getServers(req, res) {
 }
 
 function createServer(req, res) {
-  const { name, game = 'Metin2', status = 'active', contact_info, owner_user_id, pm_user_id, creator_ids = [], logo_url, website_url, notes } = req.body;
+  const { 
+    name, 
+    game = 'Metin2', 
+    status = 'active', 
+    contact_info, 
+    owner_user_id, 
+    pm_user_id, 
+    pm_ids = [],
+    budget = 0,
+    creator_ids = [], 
+    logo_url, 
+    website_url, 
+    notes 
+  } = req.body;
 
   if (!name) {
     return res.status(400).json({ error: 'El nombre del servidor es obligatorio.' });
   }
 
+  // Parse multiple PM IDs
+  const parsedPmIds = Array.isArray(pm_ids) ? pm_ids.map(id => parseInt(id, 10)).filter(Boolean) : [];
+  if (pm_user_id) {
+    const singlePmId = parseInt(pm_user_id, 10);
+    if (singlePmId && !parsedPmIds.includes(singlePmId)) {
+      parsedPmIds.unshift(singlePmId);
+    }
+  }
+
+  const primaryPmId = parsedPmIds.length > 0 ? parsedPmIds[0] : null;
+  const parsedBudget = parseFloat(budget) || 0;
+
   const result = db.prepare(`
-    INSERT INTO servers (name, game, status, contact_info, owner_user_id, pm_user_id, logo_url, website_url, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO servers (name, game, status, contact_info, owner_user_id, pm_user_id, budget, logo_url, website_url, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     game,
     status,
     contact_info || null,
     owner_user_id ? parseInt(owner_user_id, 10) : null,
-    pm_user_id ? parseInt(pm_user_id, 10) : null,
+    primaryPmId,
+    parsedBudget,
     logo_url || null,
     website_url || null,
     notes || null
@@ -83,18 +133,27 @@ function createServer(req, res) {
 
   const serverId = Number(result.lastInsertRowid);
 
-  // If PM is assigned, notify PM
-  if (pm_user_id) {
-    db.prepare(`
+  // If PMs are assigned, register in server_pms and notify each PM
+  if (parsedPmIds.length > 0) {
+    const insertPm = db.prepare(`
+      INSERT OR IGNORE INTO server_pms (server_id, pm_id, status)
+      VALUES (?, ?, 'active')
+    `);
+    const notifyPm = db.prepare(`
       INSERT INTO notifications (user_id, title, message, type, link_url)
       VALUES (?, ?, ?, ?, ?)
-    `).run(
-      pm_user_id,
-      'Nuevo Servidor Asignado',
-      `Has sido asignado como PM del servidor "${name}".`,
-      'info',
-      '/dashboard/pm?tab=servers'
-    );
+    `);
+
+    for (const pId of parsedPmIds) {
+      insertPm.run(serverId, pId);
+      notifyPm.run(
+        pId,
+        'Nuevo Servidor Asignado',
+        `Has sido asignado como Promoter Manager del servidor "${name}".`,
+        'info',
+        '/dashboard/pm?tab=servers'
+      );
+    }
   }
 
   // If creators (streamers) are assigned upon creation by Admin
@@ -130,7 +189,19 @@ function createServer(req, res) {
 
 function updateServer(req, res) {
   const serverId = parseInt(req.params.id, 10);
-  const { name, game, status, contact_info, owner_user_id, pm_user_id, logo_url, website_url, notes } = req.body;
+  const { 
+    name, 
+    game, 
+    status, 
+    contact_info, 
+    owner_user_id, 
+    pm_user_id, 
+    pm_ids, 
+    budget, 
+    logo_url, 
+    website_url, 
+    notes 
+  } = req.body;
 
   const existing = db.prepare('SELECT * FROM servers WHERE id = ? AND deleted_at IS NULL').get(serverId);
   if (!existing) {
@@ -145,7 +216,45 @@ function updateServer(req, res) {
   }
 
   const targetOwnerId = owner_user_id !== undefined ? (owner_user_id ? parseInt(owner_user_id, 10) : null) : existing.owner_user_id;
-  const targetPmId = pm_user_id !== undefined ? (pm_user_id ? parseInt(pm_user_id, 10) : null) : existing.pm_user_id;
+
+  // Handle multiple PMs or single PM
+  let targetPrimaryPmId = existing.pm_user_id;
+  if (Array.isArray(pm_ids)) {
+    const parsedPmIds = pm_ids.map(id => parseInt(id, 10)).filter(Boolean);
+    targetPrimaryPmId = parsedPmIds.length > 0 ? parsedPmIds[0] : null;
+
+    // Sync server_pms:
+    db.prepare("UPDATE server_pms SET status = 'inactive' WHERE server_id = ?").run(serverId);
+    const insertOrActivatePm = db.prepare(`
+      INSERT INTO server_pms (server_id, pm_id, status) VALUES (?, ?, 'active')
+      ON CONFLICT(server_id, pm_id) DO UPDATE SET status = 'active'
+    `);
+    const notifyPm = db.prepare(`
+      INSERT INTO notifications (user_id, title, message, type, link_url)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    for (const pId of parsedPmIds) {
+      insertOrActivatePm.run(serverId, pId);
+      notifyPm.run(
+        pId,
+        'Asignación de Servidor',
+        `Se te ha asignado la gestión del servidor "${existing.name}".`,
+        'info',
+        '/dashboard/pm?tab=servers'
+      );
+    }
+  } else if (pm_user_id !== undefined) {
+    targetPrimaryPmId = pm_user_id ? parseInt(pm_user_id, 10) : null;
+    if (targetPrimaryPmId) {
+      db.prepare(`
+        INSERT INTO server_pms (server_id, pm_id, status) VALUES (?, ?, 'active')
+        ON CONFLICT(server_id, pm_id) DO UPDATE SET status = 'active'
+      `).run(serverId, targetPrimaryPmId);
+    }
+  }
+
+  const parsedBudget = budget !== undefined ? parseFloat(budget) : existing.budget;
 
   db.prepare(`
     UPDATE servers 
@@ -155,6 +264,7 @@ function updateServer(req, res) {
         contact_info = COALESCE(?, contact_info),
         owner_user_id = ?,
         pm_user_id = ?,
+        budget = ?,
         logo_url = COALESCE(?, logo_url),
         website_url = COALESCE(?, website_url),
         notes = COALESCE(?, notes),
@@ -166,7 +276,8 @@ function updateServer(req, res) {
     status || null,
     contact_info || null,
     targetOwnerId,
-    targetPmId,
+    targetPrimaryPmId,
+    parsedBudget,
     logo_url || null,
     website_url || null,
     notes || null,
@@ -297,8 +408,18 @@ function deleteServer(req, res) {
   // Inactivar creadores asignados
   db.prepare("UPDATE server_creators SET status = 'inactive' WHERE server_id = ?").run(serverId);
 
-  // Pausar campañas
-  db.prepare("UPDATE campaigns SET status = 'paused' WHERE server_id = ? AND status = 'active'").run(serverId);
+  // Cancelar y dar de baja campañas del servidor para sincronizar gastos e ingresos
+  db.prepare("UPDATE campaigns SET deleted_at = CURRENT_TIMESTAMP, status = 'completed' WHERE server_id = ? AND deleted_at IS NULL").run(serverId);
+
+  // Limpiar honorarios autogenerados de cierre de campañas para que no persistan como gastos
+  db.prepare(`
+    DELETE FROM server_financial_transactions
+    WHERE (server_id = ? OR campaign_id IN (SELECT id FROM campaigns WHERE server_id = ?))
+      AND category = 'pm_fee' AND concept LIKE 'Honorario Cierre Campaña:%'
+  `).run(serverId, serverId);
+
+  // Cancelar contratos asociados al servidor
+  db.prepare("UPDATE server_contracts SET status = 'cancelled' WHERE server_id = ? AND status != 'cancelled'").run(serverId);
 
   // Notificar al PM asignado
   if (existing.pm_user_id) {
@@ -364,6 +485,70 @@ function removeCreatorFromServer(req, res) {
   return res.json({ message: 'Creador desvinculado del servidor.' });
 }
 
+function assignPmToServer(req, res) {
+  if (req.user.role !== 'super_admin' && req.user.role !== 'director_ops') {
+    return res.status(403).json({ error: 'Solo el Administrador puede asignar Promoter Managers a un servidor.' });
+  }
+
+  const serverId = parseInt(req.params.id, 10);
+  const { pm_id } = req.body;
+  const parsedPmId = parseInt(pm_id, 10);
+
+  if (!parsedPmId) {
+    return res.status(400).json({ error: 'pm_id es requerido.' });
+  }
+
+  const server = db.prepare('SELECT * FROM servers WHERE id = ? AND deleted_at IS NULL').get(serverId);
+  if (!server) {
+    return res.status(404).json({ error: 'Servidor no encontrado.' });
+  }
+
+  db.prepare(`
+    INSERT INTO server_pms (server_id, pm_id, status) VALUES (?, ?, 'active')
+    ON CONFLICT(server_id, pm_id) DO UPDATE SET status = 'active'
+  `).run(serverId, parsedPmId);
+
+  if (!server.pm_user_id) {
+    db.prepare('UPDATE servers SET pm_user_id = ? WHERE id = ?').run(parsedPmId, serverId);
+  }
+
+  db.prepare(`
+    INSERT INTO notifications (user_id, title, message, type, link_url)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    parsedPmId,
+    'Asignación de Servidor',
+    `Has sido asignado como Promoter Manager del servidor "${server.name}".`,
+    'info',
+    '/dashboard/pm?tab=servers'
+  );
+
+  logAudit(req.user.id, 'PM_ASSIGNED_TO_SERVER', 'server_pms', serverId, { pmId: parsedPmId }, req);
+
+  return res.json({ message: 'Promoter Manager asignado al servidor exitosamente.' });
+}
+
+function removePmFromServer(req, res) {
+  if (req.user.role !== 'super_admin' && req.user.role !== 'director_ops') {
+    return res.status(403).json({ error: 'Solo el Administrador puede desvincular Promoter Managers de un servidor.' });
+  }
+
+  const serverId = parseInt(req.params.id, 10);
+  const pmId = parseInt(req.params.pmId, 10);
+
+  db.prepare("UPDATE server_pms SET status = 'inactive' WHERE server_id = ? AND pm_id = ?").run(serverId, pmId);
+
+  const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId);
+  if (server && server.pm_user_id === pmId) {
+    const nextPm = db.prepare("SELECT pm_id FROM server_pms WHERE server_id = ? AND status = 'active' LIMIT 1").get(serverId);
+    db.prepare('UPDATE servers SET pm_user_id = ? WHERE id = ?').run(nextPm ? nextPm.pm_id : null, serverId);
+  }
+
+  logAudit(req.user.id, 'PM_REMOVED_FROM_SERVER', 'server_pms', serverId, { pmId }, req);
+
+  return res.json({ message: 'Promoter Manager desvinculado del servidor.' });
+}
+
 module.exports = {
   getServers,
   createServer,
@@ -371,5 +556,7 @@ module.exports = {
   toggleServerStatus,
   deleteServer,
   assignCreatorToServer,
-  removeCreatorFromServer
+  removeCreatorFromServer,
+  assignPmToServer,
+  removePmFromServer
 };

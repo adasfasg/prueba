@@ -73,11 +73,13 @@ function getPublicStats(req, res) {
 
   const streamMetrics = db.prepare(`
     SELECT 
-      COALESCE(SUM(duration_minutes), 0) as total_minutes,
-      COALESCE(SUM(total_views), 0) as total_views,
-      COALESCE(MAX(peak_viewers), 0) as peak_viewers
-    FROM activity_evidences
-    WHERE status IN ('approved', 'paid')
+      COALESCE(SUM(ae.duration_minutes), 0) as total_minutes,
+      COALESCE(SUM(ae.total_views), 0) as total_views,
+      COALESCE(MAX(ae.peak_viewers), 0) as peak_viewers
+    FROM activity_evidences ae
+    JOIN campaigns c ON ae.campaign_id = c.id
+    JOIN servers s ON c.server_id = s.id
+    WHERE ae.status IN ('approved', 'paid') AND c.deleted_at IS NULL AND s.deleted_at IS NULL
   `).get();
 
   return res.json({

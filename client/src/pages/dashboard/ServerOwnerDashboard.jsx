@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
+import GroupedCampaignsView from '../../components/GroupedCampaignsView';
 import { useAuth } from '../../context/AuthContext';
 import { 
   Server, Users, CheckCircle2, Tv, ExternalLink, Mail, Phone, 
@@ -11,6 +12,7 @@ export default function ServerOwnerDashboard() {
   const [activeTab, setActiveTab] = useState('overview');
   const [metrics, setMetrics] = useState(null);
   const [evidences, setEvidences] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
   const [imageModalUrl, setImageModalUrl] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -19,13 +21,15 @@ export default function ServerOwnerDashboard() {
       setLoading(true);
       try {
         const headers = { Authorization: `Bearer ${token}` };
-        const [mRes, eRes] = await Promise.all([
+        const [mRes, eRes, cRes] = await Promise.all([
           fetch('/api/metrics/dashboard', { headers }),
-          fetch('/api/evidences', { headers })
+          fetch('/api/evidences', { headers }),
+          fetch('/api/campaigns', { headers })
         ]);
 
         if (mRes.ok) setMetrics(await mRes.json());
         if (eRes.ok) setEvidences(await eRes.json());
+        if (cRes.ok) setCampaigns(await cRes.json());
       } catch (err) {
         console.error(err);
       } finally {
@@ -267,6 +271,19 @@ export default function ServerOwnerDashboard() {
           </div>
 
         </div>
+      )}
+
+      {/* Tab: Campañas del Servidor */}
+      {activeTab === 'campaigns' && (
+        <GroupedCampaignsView
+          servers={server ? [server] : []}
+          campaigns={campaigns}
+          userRole="server_owner"
+          readOnly={true}
+          canCreate={false}
+          canEdit={false}
+          canDelete={false}
+        />
       )}
 
       {/* Tab: Creadores */}
